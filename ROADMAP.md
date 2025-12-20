@@ -29,9 +29,9 @@ Progress tracking for `sam-track` implementation. See [Investigation Notes](scra
 - [x] 3.2.1 Implement text prompt handler
 - [x] 3.3.1 Implement ROI YAML prompt handler (polygon-to-mask conversion)
 - [x] 3.3.2 Test with labelroi output files
-- [ ] 3.4.1 Implement pose prompt handler
-- [ ] 3.4.2 Support track-based object IDs
-- [ ] 3.4.3 Support node filtering
+- [x] 3.4.1 Implement pose prompt handler
+- [x] 3.4.2 Support track-based object IDs
+- [x] 3.4.3 Support node filtering
 - [x] 3.5.1 Add prompt validation
 
 ## Phase 4: SAM3 Integration

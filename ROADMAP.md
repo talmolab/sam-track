@@ -9,8 +9,8 @@ Progress tracking for `sam-track` implementation. See [Investigation Notes](scra
 - [x] 1.1.3 Create `.gitignore` (Python, uv, HDF5, etc.)
 - [x] 1.1.4 Create basic package structure in `src/sam_track/`
 - [x] 1.1.5 Test `uv sync` on Linux with CUDA
-- [ ] 1.1.6 Test `uv sync` on macOS with Apple Silicon
-- [ ] 1.1.7 Test `uv sync` on Windows with CUDA
+- [x] 1.1.6 Test `uv sync` on macOS with Apple Silicon
+- [x] 1.1.7 Test `uv sync` on Windows with CUDA
 - [ ] 1.1.8 Document first-time setup in README.md
 
 ## Phase 2: Core Infrastructure

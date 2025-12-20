@@ -46,12 +46,12 @@ Progress tracking for `sam-track` implementation. See [Investigation Notes](scra
 
 ## Phase 5: Output Writers
 
-- [ ] 5.1.1 Implement BBoxWriter
-- [ ] 5.1.2 Add dataclass serialization
-- [ ] 5.2.1 Implement SegmentationWriter
-- [ ] 5.2.2 Add GZIP compression
-- [ ] 5.2.3 Test with large videos
-- [ ] 5.3.1 Add combined output metadata file
+- [x] 5.1.1 Implement BBoxWriter
+- [x] 5.1.2 Add dataclass serialization
+- [x] 5.2.1 Implement SegmentationWriter
+- [x] 5.2.2 Add GZIP compression (level 1, single dataset)
+- [x] 5.2.3 Test with large videos
+- ~~5.3.1 Add combined output metadata file~~ (removed: metadata in each file)
 
 ## Phase 6: CLI Implementation
 
@@ -69,7 +69,7 @@ Progress tracking for `sam-track` implementation. See [Investigation Notes](scra
 
 - [x] 7.1.1 Create test fixtures
 - [x] 7.1.2 Write unit tests for prompts
-- [ ] 7.1.3 Write unit tests for outputs
+- [x] 7.1.3 Write unit tests for outputs
 - [ ] 7.1.4 Write CLI integration tests
 - [ ] 7.2.1 Set up GitHub Actions CI
 - [ ] 7.2.2 Add GPU testing workflow

@@ -18,10 +18,10 @@ Progress tracking for `sam-track` implementation. See [Investigation Notes](scra
 - [x] 2.1.1 Implement `auth.py` with HF Hub authentication
 - [x] 2.1.2 Add interactive login prompt with rich
 - [x] 2.1.3 Test authentication flow with gated model
-- [x] 2.2.1 Implement `video.py` wrapper
-- [x] 2.2.2 Support all sleap-io video backends
-- [x] 2.2.3 Handle video metadata (FPS, duration)
-- [x] 2.3.1 Create `utils.py` with common helpers
+- [ ] 2.2.1 Implement `video.py` wrapper
+- [ ] 2.2.2 Support all sleap-io video backends
+- [ ] 2.2.3 Handle video metadata (FPS, duration)
+- [ ] 2.3.1 Create `utils.py` with common helpers
 
 ## Phase 3: Prompt Handlers
 

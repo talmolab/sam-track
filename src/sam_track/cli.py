@@ -120,13 +120,14 @@ def auth(
 
     Use --token to login, or run 'uvx hf auth login' for interactive authentication.
     """
+    from huggingface_hub import login as hf_login
+
     from .auth import (
         SAM3_REPO_ID,
         check_authentication,
         check_model_access,
         get_username,
     )
-    from huggingface_hub import login as hf_login
 
     # Handle login request first
     if token:
@@ -183,7 +184,9 @@ def auth(
         console.print()
         console.print("    - Click [bold]Create new token[/bold]")
         console.print("    - Name it: [cyan]sam-track[/cyan]")
-        console.print("    - Select [bold]Read[/bold] permission (top tab, not fine-grained)")
+        console.print(
+            "    - Select [bold]Read[/bold] permission (top tab, not fine-grained)"
+        )
         console.print()
         console.print("  [bold]Step 2:[/bold] Login with your token:")
         console.print("    [cyan]uv run sam-track auth --token hf_...[/cyan]")
@@ -204,13 +207,18 @@ def auth(
             f"https://huggingface.co/{SAM3_REPO_ID}[/link]"
         )
         console.print()
-        console.print("  After approval, run [cyan]uv run sam-track auth[/cyan] again to verify.")
+        console.print(
+            "  After approval, run [cyan]uv run sam-track auth[/cyan] again to verify."
+        )
 
     if not issues_found:
         console.print()
         console.print("[green]✓[/green] Ready to use SAM3!")
         console.print()
-        console.print("  Run [cyan]uv run sam-track track <video> --text \"object\"[/cyan] to get started.")
+        console.print(
+            '  Run [cyan]uv run sam-track track <video> --text "object"[/cyan] '
+            "to get started."
+        )
     else:
         raise typer.Exit(1)
 

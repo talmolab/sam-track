@@ -95,7 +95,8 @@ def ensure_authenticated(
             console.print(f"[green]Authenticated as {username}[/green]")
             return
         console.print(
-            f"\n[yellow]Authenticated as {username}, but no access to {repo_id}.[/yellow]\n"
+            f"\n[yellow]Authenticated as {username}, "
+            f"but no access to {repo_id}.[/yellow]\n"
             f"Request access at: https://huggingface.co/{repo_id}"
         )
         if not interactive:

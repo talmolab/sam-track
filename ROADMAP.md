@@ -25,14 +25,14 @@ Progress tracking for `sam-track` implementation. See [Investigation Notes](scra
 
 ## Phase 3: Prompt Handlers
 
-- [ ] 3.1.1 Implement base prompt classes
-- [ ] 3.2.1 Implement text prompt handler
-- [ ] 3.3.1 Implement ROI YAML prompt handler
-- [ ] 3.3.2 Test with labelroi output files
+- [x] 3.1.1 Implement base prompt classes
+- [x] 3.2.1 Implement text prompt handler
+- [x] 3.3.1 Implement ROI YAML prompt handler (polygon-to-mask conversion)
+- [x] 3.3.2 Test with labelroi output files
 - [ ] 3.4.1 Implement pose prompt handler
 - [ ] 3.4.2 Support track-based object IDs
 - [ ] 3.4.3 Support node filtering
-- [ ] 3.5.1 Add prompt validation
+- [x] 3.5.1 Add prompt validation
 
 ## Phase 4: SAM3 Integration
 
@@ -67,8 +67,8 @@ Progress tracking for `sam-track` implementation. See [Investigation Notes](scra
 
 ## Phase 7: Testing & CI/CD
 
-- [ ] 7.1.1 Create test fixtures
-- [ ] 7.1.2 Write unit tests for prompts
+- [x] 7.1.1 Create test fixtures
+- [x] 7.1.2 Write unit tests for prompts
 - [ ] 7.1.3 Write unit tests for outputs
 - [ ] 7.1.4 Write CLI integration tests
 - [ ] 7.2.1 Set up GitHub Actions CI
@@ -90,5 +90,5 @@ Progress tracking for `sam-track` implementation. See [Investigation Notes](scra
 - [ ] Text prompt re-detection frequency (first frame only vs periodic)
 - [ ] Multi-object handling from single text prompt
 - [ ] Streaming mode for long videos
-- [ ] ROI prompt type (bounding box vs centroid)
+- [x] ROI prompt type → **Decided: polygon-to-mask conversion** (best accuracy)
 - [ ] Graceful shutdown with partial saves

@@ -1,7 +1,6 @@
 """ROI YAML prompt handler for labelroi format."""
 
 from pathlib import Path
-from typing import Optional
 
 import numpy as np
 import yaml
@@ -106,7 +105,7 @@ class ROIPromptHandler(PromptHandler):
         self.use_masks = use_masks
         self.include_boxes = include_boxes
 
-        self._data: Optional[dict] = None
+        self._data: dict | None = None
 
     @property
     def prompt_type(self) -> PromptType:
@@ -133,7 +132,7 @@ class ROIPromptHandler(PromptHandler):
         return data.get("frame", 0)
 
     @property
-    def source_video(self) -> Optional[str]:
+    def source_video(self) -> str | None:
         """Source video filename from YAML."""
         data = self._load_yaml()
         return data.get("source")

@@ -13,7 +13,6 @@ from sam_track.prompts import (
     polygon_to_mask,
 )
 
-
 # Test data path
 DATA_DIR = Path(__file__).parent.parent / "data"
 ROI_FILE = DATA_DIR / "first_frame_mice.yml"

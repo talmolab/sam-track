@@ -4,7 +4,6 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
-from typing import Optional
 
 import numpy as np
 
@@ -41,10 +40,10 @@ class Prompt:
     frame_idx: int = 0
     obj_ids: list[int] = field(default_factory=list)
     obj_names: dict[int, str] = field(default_factory=dict)
-    masks: Optional[list[np.ndarray]] = None
-    boxes: Optional[list[tuple[float, float, float, float]]] = None
-    text: Optional[str] = None
-    source_path: Optional[Path] = None
+    masks: list[np.ndarray] | None = None
+    boxes: list[tuple[float, float, float, float]] | None = None
+    text: str | None = None
+    source_path: Path | None = None
 
     def __post_init__(self):
         """Validate prompt data."""

@@ -343,9 +343,8 @@ class SAM3Tracker:
         boxes = self._compute_boxes_from_masks(masks_np)
 
         # Compute confidence scores
-        if (
-            output.object_score_logits is not None
-            and isinstance(output.object_score_logits, torch.Tensor)
+        if output.object_score_logits is not None and isinstance(
+            output.object_score_logits, torch.Tensor
         ):
             scores = torch.sigmoid(output.object_score_logits).float().cpu().numpy()
         else:
@@ -606,24 +605,16 @@ class SAM3Tracker:
             masks_np = masks.cpu().numpy().astype(bool)
 
             # Extract object IDs
-            obj_ids = (
-                np.array(output.object_ids) if output.object_ids else np.array([])
-            )
+            obj_ids = np.array(output.object_ids) if output.object_ids else np.array([])
 
             # Compute bounding boxes from masks
             boxes = self._compute_boxes_from_masks(masks_np)
 
             # Compute confidence scores from object score logits if available
-            if (
-                output.object_score_logits is not None
-                and isinstance(output.object_score_logits, torch.Tensor)
+            if output.object_score_logits is not None and isinstance(
+                output.object_score_logits, torch.Tensor
             ):
-                scores = (
-                    torch.sigmoid(output.object_score_logits)
-                    .float()
-                    .cpu()
-                    .numpy()
-                )
+                scores = torch.sigmoid(output.object_score_logits).float().cpu().numpy()
             else:
                 # Default to 1.0 if no scores available
                 scores = np.ones(len(obj_ids))
@@ -638,7 +629,7 @@ class SAM3Tracker:
                 masks=masks_np,
                 boxes=boxes,
                 scores=scores,
-                )
+            )
 
     def _compute_boxes_from_masks(self, masks: np.ndarray) -> np.ndarray:
         """Compute bounding boxes from binary masks.

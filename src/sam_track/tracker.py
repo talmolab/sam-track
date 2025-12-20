@@ -8,16 +8,18 @@ SAM3 supports two modes:
   instances matching a text description using Sam3VideoModel.
 - **Visual prompts (PVS)**: Promptable Visual Segmentation - track specific objects
   using points, boxes, or masks using Sam3TrackerVideoModel.
+
+Supports both batch mode (all frames loaded) and streaming mode (frame-by-frame).
 """
 
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass
-from typing import Iterator
 
 import numpy as np
 import torch
+from tqdm.auto import tqdm
 
 from .prompts.base import Prompt, PromptType
-
 
 # Default model ID for SAM3
 DEFAULT_MODEL_ID = "facebook/sam3"
@@ -109,9 +111,13 @@ class SAM3Tracker:
         # Session state
         self._inference_session = None
         self._use_text: bool = False
+        self._streaming: bool = False
         self._video_height: int = 0
         self._video_width: int = 0
-        self._prompt_frame_idx: int | None = None  # Track first prompt frame for propagation
+        self._num_frames: int | None = None
+        # Track first prompt frame for propagation
+        self._prompt_frame_idx: int | None = None
+        self._frame_idx: int = 0  # Current frame index for streaming mode
 
     def _load_text_model(self):
         """Lazy-load SAM3 video model for text prompts (PCS)."""
@@ -128,9 +134,9 @@ class SAM3Tracker:
         if self._visual_model is None:
             from transformers import Sam3TrackerVideoModel, Sam3TrackerVideoProcessor
 
-            self._visual_model = Sam3TrackerVideoModel.from_pretrained(self.model_id).to(
-                self.device, dtype=self.dtype
-            )
+            self._visual_model = Sam3TrackerVideoModel.from_pretrained(
+                self.model_id
+            ).to(self.device, dtype=self.dtype)
             self._visual_processor = Sam3TrackerVideoProcessor.from_pretrained(
                 self.model_id
             )
@@ -144,16 +150,22 @@ class SAM3Tracker:
         self,
         video_frames: list[np.ndarray],
         use_text: bool = False,
+        video_storage_device: str = "cpu",
+        max_vision_cache_size: int = 1,
     ) -> None:
         """Initialize a new tracking session with video frames.
 
         This loads all video frames into memory for SAM3 processing. For long
-        videos, consider using streaming mode instead.
+        videos, consider using streaming mode via init_streaming_session() instead.
 
         Args:
             video_frames: List of video frames as numpy arrays (H, W, C) in RGB.
             use_text: If True, initialize for text prompts (PCS mode).
                 If False, initialize for visual prompts (PVS mode).
+            video_storage_device: Device to store video frames on. Use "cpu" for
+                memory optimization with long videos.
+            max_vision_cache_size: Maximum number of vision features to cache.
+                Lower values use less memory but may be slower.
         """
         if len(video_frames) == 0:
             raise ValueError("Video must have at least one frame")
@@ -161,8 +173,11 @@ class SAM3Tracker:
         # Store video dimensions and mode
         self._video_height = video_frames[0].shape[0]
         self._video_width = video_frames[0].shape[1]
+        self._num_frames = len(video_frames)
         self._use_text = use_text
+        self._streaming = False
         self._prompt_frame_idx = None
+        self._frame_idx = 0
 
         if use_text:
             # Load text model and initialize session
@@ -171,7 +186,7 @@ class SAM3Tracker:
                 video=video_frames,
                 inference_device=self.device,
                 processing_device="cpu",
-                video_storage_device="cpu",
+                video_storage_device=video_storage_device,
                 dtype=self.dtype,
             )
         else:
@@ -180,8 +195,169 @@ class SAM3Tracker:
             self._inference_session = self._visual_processor.init_video_session(
                 video=video_frames,
                 inference_device=self.device,
+                video_storage_device=video_storage_device,
+                max_vision_features_cache_size=max_vision_cache_size,
                 dtype=self.dtype,
             )
+
+    def init_streaming_session(
+        self,
+        use_text: bool = False,
+        num_frames: int | None = None,
+    ) -> None:
+        """Initialize a streaming session for frame-by-frame processing.
+
+        Streaming mode processes frames one at a time, which is memory-efficient
+        for long videos or real-time applications. Frames are provided via
+        process_frame() instead of loading all at once.
+
+        Note: Streaming mode may have lower tracking quality than batch mode
+        because it cannot use future frames for object matching.
+
+        Args:
+            use_text: If True, initialize for text prompts (PCS mode).
+                If False, initialize for visual prompts (PVS mode).
+            num_frames: Optional total number of frames (for progress reporting).
+        """
+        self._use_text = use_text
+        self._streaming = True
+        self._num_frames = num_frames
+        self._prompt_frame_idx = None
+        self._frame_idx = 0
+        self._video_height = 0
+        self._video_width = 0
+
+        if use_text:
+            self._load_text_model()
+            self._inference_session = self._text_processor.init_video_session(
+                inference_device=self.device,
+                processing_device="cpu",
+                video_storage_device="cpu",
+                dtype=self.dtype,
+            )
+        else:
+            self._load_visual_model()
+            self._inference_session = self._visual_processor.init_video_session(
+                inference_device=self.device,
+                dtype=self.dtype,
+            )
+
+    def process_frame(self, frame: np.ndarray) -> TrackingResult:
+        """Process a single frame in streaming mode.
+
+        This method processes one frame at a time, yielding tracking results
+        for that frame. Use this for real-time processing or memory-constrained
+        environments.
+
+        Args:
+            frame: Video frame as numpy array (H, W, C) in RGB.
+
+        Returns:
+            TrackingResult for the processed frame.
+
+        Raises:
+            RuntimeError: If no session is active or not in streaming mode.
+        """
+        if not self.is_session_active:
+            raise RuntimeError(
+                "No active session. Call init_streaming_session() first."
+            )
+
+        if not self._streaming:
+            raise RuntimeError(
+                "Not in streaming mode. Use init_streaming_session() for "
+                "frame-by-frame processing, or use propagate() for batch mode."
+            )
+
+        # Update video dimensions from first frame
+        if self._frame_idx == 0:
+            self._video_height = frame.shape[0]
+            self._video_width = frame.shape[1]
+
+        frame_idx = self._frame_idx
+        self._frame_idx += 1
+
+        if self._use_text:
+            return self._process_frame_text(frame, frame_idx)
+        else:
+            return self._process_frame_visual(frame, frame_idx)
+
+    def _process_frame_text(self, frame: np.ndarray, frame_idx: int) -> TrackingResult:
+        """Process a frame in streaming text mode."""
+        # Process frame using the processor
+        inputs = self._text_processor(
+            images=frame, device=self.device, return_tensors="pt"
+        )
+
+        # Run model with processed frame
+        output = self._text_model(
+            inference_session=self._inference_session,
+            frame=inputs.pixel_values[0],
+            reverse=False,
+        )
+
+        # Post-process outputs
+        processed = self._text_processor.postprocess_outputs(
+            self._inference_session,
+            output,
+            original_sizes=inputs.original_sizes,
+        )
+
+        return TrackingResult(
+            frame_idx=frame_idx,
+            object_ids=processed["object_ids"].cpu().numpy(),
+            masks=processed["masks"].cpu().numpy().astype(bool),
+            boxes=processed["boxes"].cpu().numpy(),
+            scores=processed["scores"].cpu().numpy(),
+        )
+
+    def _process_frame_visual(
+        self, frame: np.ndarray, frame_idx: int
+    ) -> TrackingResult:
+        """Process a frame in streaming visual mode."""
+        # Process frame using the processor
+        inputs = self._visual_processor(
+            images=frame, device=self.device, return_tensors="pt"
+        )
+
+        # Run model with processed frame
+        output = self._visual_model(
+            inference_session=self._inference_session,
+            frame=inputs.pixel_values[0],
+        )
+
+        # Post-process masks to original resolution
+        masks = self._visual_processor.post_process_masks(
+            [output.pred_masks],
+            original_sizes=inputs.original_sizes,
+            binarize=True,
+        )[0]
+
+        # Convert to numpy
+        masks_np = masks.cpu().numpy().astype(bool)
+
+        # Extract object IDs
+        obj_ids = np.array(output.object_ids) if output.object_ids else np.array([])
+
+        # Compute bounding boxes from masks
+        boxes = self._compute_boxes_from_masks(masks_np)
+
+        # Compute confidence scores
+        if (
+            output.object_score_logits is not None
+            and isinstance(output.object_score_logits, torch.Tensor)
+        ):
+            scores = torch.sigmoid(output.object_score_logits).float().cpu().numpy()
+        else:
+            scores = np.ones(len(obj_ids))
+
+        return TrackingResult(
+            frame_idx=frame_idx,
+            object_ids=obj_ids,
+            masks=masks_np,
+            boxes=boxes,
+            scores=scores,
+        )
 
     def add_text_prompt(self, text: str) -> None:
         """Add a text prompt to detect and track objects.
@@ -209,7 +385,9 @@ class SAM3Tracker:
             text=text,
         )
 
-    def add_prompt(self, prompt: Prompt) -> None:
+    def add_prompt(
+        self, prompt: Prompt, original_size: tuple[int, int] | None = None
+    ) -> None:
         """Add a visual prompt to the tracking session.
 
         The prompt specifies which objects to track using visual cues such as
@@ -217,6 +395,8 @@ class SAM3Tracker:
 
         Args:
             prompt: A Prompt object containing the tracking specification.
+            original_size: Original frame size as (height, width). Required for
+                streaming mode, optional for batch mode.
 
         Raises:
             RuntimeError: If no session is active or session is in text mode.
@@ -244,6 +424,10 @@ class SAM3Tracker:
                 "frame_idx": prompt.frame_idx,
                 "obj_ids": obj_id,
             }
+
+            # Add original_size for streaming mode
+            if self._streaming and original_size is not None:
+                kwargs["original_size"] = original_size
 
             # Add mask if available (preferred - most accurate)
             if prompt.masks is not None and i < len(prompt.masks):
@@ -280,6 +464,8 @@ class SAM3Tracker:
         self,
         max_frames: int | None = None,
         reverse: bool = False,
+        show_progress: bool = False,
+        progress_callback: Callable[[int, int], None] | None = None,
     ) -> Iterator[TrackingResult]:
         """Propagate tracking through the video.
 
@@ -290,90 +476,168 @@ class SAM3Tracker:
             max_frames: Maximum number of frames to process. If None, processes
                 all frames.
             reverse: If True, propagate backward from the prompt frame.
+            show_progress: If True, display a progress bar using tqdm.
+            progress_callback: Optional callback function called with
+                (current_frame, total_frames) for custom progress reporting.
 
         Yields:
             TrackingResult for each processed frame.
 
         Raises:
-            RuntimeError: If no session is active.
+            RuntimeError: If no session is active or in streaming mode.
         """
         if not self.is_session_active:
             raise RuntimeError("No active session. Call init_session() first.")
 
+        if self._streaming:
+            raise RuntimeError(
+                "Cannot use propagate() in streaming mode. "
+                "Use process_frame() instead for frame-by-frame processing."
+            )
+
         # Get original video size for mask post-processing
         original_size = [[self._video_height, self._video_width]]
 
+        # Determine total frames for progress reporting
+        total_frames = max_frames if max_frames else self._num_frames
+
         if self._use_text:
-            # Text prompt mode - use Sam3VideoModel
-            for output in self._text_model.propagate_in_video_iterator(
-                inference_session=self._inference_session,
-                max_frame_num_to_track=max_frames,
-            ):
-                # Post-process outputs using text processor
-                processed = self._text_processor.postprocess_outputs(
-                    self._inference_session, output
-                )
-
-                yield TrackingResult(
-                    frame_idx=output.frame_idx,
-                    object_ids=processed["object_ids"].numpy(),
-                    masks=processed["masks"].numpy().astype(bool),
-                    boxes=processed["boxes"].numpy(),
-                    scores=processed["scores"].numpy(),
-                )
+            yield from self._propagate_text(
+                max_frames,
+                original_size,
+                total_frames,
+                show_progress,
+                progress_callback,
+            )
         else:
-            # Visual prompt mode - use Sam3TrackerVideoModel
-            # Run inference on the prompt frame first to initialize tracking
-            if self._prompt_frame_idx is not None:
-                self._visual_model(
-                    inference_session=self._inference_session,
-                    frame_idx=self._prompt_frame_idx,
-                )
+            yield from self._propagate_visual(
+                max_frames,
+                reverse,
+                original_size,
+                total_frames,
+                show_progress,
+                progress_callback,
+            )
 
-            for output in self._visual_model.propagate_in_video_iterator(
+    def _propagate_text(
+        self,
+        max_frames: int | None,
+        original_size: list[list[int]],
+        total_frames: int | None,
+        show_progress: bool,
+        progress_callback: Callable[[int, int], None] | None,
+    ) -> Iterator[TrackingResult]:
+        """Propagate text prompts through video."""
+        iterator = self._text_model.propagate_in_video_iterator(
+            inference_session=self._inference_session,
+            max_frame_num_to_track=max_frames,
+        )
+
+        # Wrap with progress bar if requested
+        if show_progress:
+            iterator = tqdm(
+                iterator,
+                total=total_frames,
+                desc="Tracking",
+                unit="frame",
+            )
+
+        frame_count = 0
+        for output in iterator:
+            # Post-process outputs using text processor
+            processed = self._text_processor.postprocess_outputs(
+                self._inference_session, output
+            )
+
+            frame_count += 1
+            if progress_callback and total_frames:
+                progress_callback(frame_count, total_frames)
+
+            yield TrackingResult(
+                frame_idx=output.frame_idx,
+                object_ids=processed["object_ids"].cpu().numpy(),
+                masks=processed["masks"].cpu().numpy().astype(bool),
+                boxes=processed["boxes"].cpu().numpy(),
+                scores=processed["scores"].cpu().numpy(),
+            )
+
+    def _propagate_visual(
+        self,
+        max_frames: int | None,
+        reverse: bool,
+        original_size: list[list[int]],
+        total_frames: int | None,
+        show_progress: bool,
+        progress_callback: Callable[[int, int], None] | None,
+    ) -> Iterator[TrackingResult]:
+        """Propagate visual prompts through video."""
+        # Run inference on the prompt frame first to initialize tracking
+        if self._prompt_frame_idx is not None:
+            self._visual_model(
                 inference_session=self._inference_session,
-                max_frame_num_to_track=max_frames,
-                reverse=reverse,
+                frame_idx=self._prompt_frame_idx,
+            )
+
+        iterator = self._visual_model.propagate_in_video_iterator(
+            inference_session=self._inference_session,
+            max_frame_num_to_track=max_frames,
+            reverse=reverse,
+        )
+
+        # Wrap with progress bar if requested
+        if show_progress:
+            iterator = tqdm(
+                iterator,
+                total=total_frames,
+                desc="Tracking",
+                unit="frame",
+            )
+
+        frame_count = 0
+        for output in iterator:
+            # Post-process masks to original resolution
+            masks = self._visual_processor.post_process_masks(
+                [output.pred_masks],
+                original_sizes=original_size,
+                binarize=True,
+            )[0]
+
+            # Convert to numpy
+            masks_np = masks.cpu().numpy().astype(bool)
+
+            # Extract object IDs
+            obj_ids = (
+                np.array(output.object_ids) if output.object_ids else np.array([])
+            )
+
+            # Compute bounding boxes from masks
+            boxes = self._compute_boxes_from_masks(masks_np)
+
+            # Compute confidence scores from object score logits if available
+            if (
+                output.object_score_logits is not None
+                and isinstance(output.object_score_logits, torch.Tensor)
             ):
-                # Post-process masks to original resolution
-                masks = self._visual_processor.post_process_masks(
-                    [output.pred_masks],
-                    original_sizes=original_size,
-                    binarize=True,
-                )[0]
-
-                # Convert to numpy
-                masks_np = masks.cpu().numpy().astype(bool)
-
-                # Extract object IDs
-                obj_ids = (
-                    np.array(output.object_ids) if output.object_ids else np.array([])
+                scores = (
+                    torch.sigmoid(output.object_score_logits)
+                    .float()
+                    .cpu()
+                    .numpy()
                 )
+            else:
+                # Default to 1.0 if no scores available
+                scores = np.ones(len(obj_ids))
 
-                # Compute bounding boxes from masks
-                boxes = self._compute_boxes_from_masks(masks_np)
+            frame_count += 1
+            if progress_callback and total_frames:
+                progress_callback(frame_count, total_frames)
 
-                # Compute confidence scores from object score logits if available
-                if (
-                    output.object_score_logits is not None
-                    and isinstance(output.object_score_logits, torch.Tensor)
-                ):
-                    scores = (
-                        torch.sigmoid(output.object_score_logits)
-                        .float()
-                        .cpu()
-                        .numpy()
-                    )
-                else:
-                    # Default to 1.0 if no scores available
-                    scores = np.ones(len(obj_ids))
-
-                yield TrackingResult(
-                    frame_idx=output.frame_idx,
-                    object_ids=obj_ids,
-                    masks=masks_np,
-                    boxes=boxes,
-                    scores=scores,
+            yield TrackingResult(
+                frame_idx=output.frame_idx,
+                object_ids=obj_ids,
+                masks=masks_np,
+                boxes=boxes,
+                scores=scores,
                 )
 
     def _compute_boxes_from_masks(self, masks: np.ndarray) -> np.ndarray:

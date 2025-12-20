@@ -40,9 +40,9 @@ Progress tracking for `sam-track` implementation. See [Investigation Notes](scra
 - [x] 4.1.2 Support text prompts via Sam3VideoModel
 - [x] 4.1.3 Support visual prompts via Sam3TrackerVideoModel
 - [x] 4.1.4 Handle multi-object tracking
-- [ ] 4.2.1 Add streaming inference mode
-- [ ] 4.2.2 Memory optimization for long videos
-- [ ] 4.2.3 Progress reporting with tqdm/rich
+- [x] 4.2.1 Add streaming inference mode
+- [x] 4.2.2 Memory optimization for long videos
+- [x] 4.2.3 Progress reporting with tqdm/rich
 
 ## Phase 5: Output Writers
 

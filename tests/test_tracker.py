@@ -374,6 +374,256 @@ class TestSAM3TrackerAddPromptFormats:
         assert mock_processor.add_inputs_to_inference_session.call_count == 3
 
 
+class TestSAM3TrackerStreamingMode:
+    """Tests for SAM3Tracker streaming mode."""
+
+    def test_init_streaming_session_visual(self):
+        """Test initializing streaming session for visual prompts."""
+        tracker = SAM3Tracker()
+
+        with patch.object(tracker, "_load_visual_model"):
+            tracker._visual_processor = MagicMock()
+            tracker._visual_processor.init_video_session.return_value = MagicMock()
+
+            tracker.init_streaming_session(use_text=False, num_frames=100)
+
+            assert tracker._streaming is True
+            assert tracker._use_text is False
+            assert tracker._num_frames == 100
+            assert tracker._frame_idx == 0
+
+    def test_init_streaming_session_text(self):
+        """Test initializing streaming session for text prompts."""
+        tracker = SAM3Tracker()
+
+        with patch.object(tracker, "_load_text_model"):
+            tracker._text_processor = MagicMock()
+            tracker._text_processor.init_video_session.return_value = MagicMock()
+
+            tracker.init_streaming_session(use_text=True)
+
+            assert tracker._streaming is True
+            assert tracker._use_text is True
+
+    def test_process_frame_without_session(self):
+        """Test process_frame raises error without session."""
+        tracker = SAM3Tracker()
+        frame = np.zeros((480, 640, 3), dtype=np.uint8)
+
+        with pytest.raises(RuntimeError, match="No active session"):
+            tracker.process_frame(frame)
+
+    def test_process_frame_not_streaming(self):
+        """Test process_frame raises error when not in streaming mode."""
+        tracker = SAM3Tracker()
+        tracker._inference_session = MagicMock()
+        tracker._streaming = False
+
+        frame = np.zeros((480, 640, 3), dtype=np.uint8)
+        with pytest.raises(RuntimeError, match="Not in streaming mode"):
+            tracker.process_frame(frame)
+
+    def test_process_frame_updates_dimensions(self):
+        """Test process_frame updates video dimensions on first frame."""
+        tracker = SAM3Tracker()
+        tracker._inference_session = MagicMock()
+        tracker._streaming = True
+        tracker._use_text = True
+        tracker._frame_idx = 0
+
+        # Mock text processor and model
+        tracker._text_processor = MagicMock()
+        tracker._text_processor.return_value = MagicMock(
+            pixel_values=torch.zeros(1, 3, 480, 640),
+            original_sizes=torch.tensor([[480, 640]]),
+        )
+        tracker._text_model = MagicMock()
+        mock_output = MagicMock()
+        mock_output.frame_idx = 0
+        tracker._text_model.return_value = mock_output
+        tracker._text_processor.postprocess_outputs.return_value = {
+            "object_ids": torch.tensor([1]),
+            "masks": torch.zeros(1, 480, 640),
+            "boxes": torch.tensor([[0, 0, 100, 100]]),
+            "scores": torch.tensor([0.9]),
+        }
+
+        frame = np.zeros((480, 640, 3), dtype=np.uint8)
+        tracker.process_frame(frame)
+
+        assert tracker._video_height == 480
+        assert tracker._video_width == 640
+        assert tracker._frame_idx == 1
+
+    def test_propagate_fails_in_streaming_mode(self):
+        """Test propagate raises error in streaming mode."""
+        tracker = SAM3Tracker()
+        tracker._inference_session = MagicMock()
+        tracker._streaming = True
+
+        with pytest.raises(RuntimeError, match="Cannot use propagate"):
+            list(tracker.propagate())
+
+
+class TestSAM3TrackerMemoryOptimization:
+    """Tests for SAM3Tracker memory optimization options."""
+
+    def test_init_session_video_storage_device(self):
+        """Test init_session accepts video_storage_device parameter."""
+        tracker = SAM3Tracker()
+
+        with patch.object(tracker, "_load_visual_model"):
+            tracker._visual_processor = MagicMock()
+            tracker._visual_processor.init_video_session.return_value = MagicMock()
+
+            frames = [np.zeros((100, 100, 3), dtype=np.uint8)]
+            tracker.init_session(frames, use_text=False, video_storage_device="cpu")
+
+            # Check that video_storage_device was passed
+            call_kwargs = tracker._visual_processor.init_video_session.call_args[1]
+            assert call_kwargs["video_storage_device"] == "cpu"
+
+    def test_init_session_max_vision_cache_size(self):
+        """Test init_session accepts max_vision_cache_size parameter."""
+        tracker = SAM3Tracker()
+
+        with patch.object(tracker, "_load_visual_model"):
+            tracker._visual_processor = MagicMock()
+            tracker._visual_processor.init_video_session.return_value = MagicMock()
+
+            frames = [np.zeros((100, 100, 3), dtype=np.uint8)]
+            tracker.init_session(frames, use_text=False, max_vision_cache_size=4)
+
+            # Check that max_vision_features_cache_size was passed
+            call_kwargs = tracker._visual_processor.init_video_session.call_args[1]
+            assert call_kwargs["max_vision_features_cache_size"] == 4
+
+    def test_init_session_stores_num_frames(self):
+        """Test init_session stores the number of frames."""
+        tracker = SAM3Tracker()
+
+        with patch.object(tracker, "_load_visual_model"):
+            tracker._visual_processor = MagicMock()
+            tracker._visual_processor.init_video_session.return_value = MagicMock()
+
+            frames = [np.zeros((100, 100, 3), dtype=np.uint8) for _ in range(25)]
+            tracker.init_session(frames, use_text=False)
+
+            assert tracker._num_frames == 25
+            assert tracker._streaming is False
+
+
+class TestSAM3TrackerProgressReporting:
+    """Tests for SAM3Tracker progress reporting."""
+
+    def test_propagate_with_progress_callback(self):
+        """Test propagate calls progress callback."""
+        tracker = SAM3Tracker()
+        tracker._inference_session = MagicMock()
+        tracker._streaming = False
+        tracker._use_text = True
+        tracker._video_height = 100
+        tracker._video_width = 100
+        tracker._num_frames = 3
+
+        # Mock text processor and model
+        tracker._text_processor = MagicMock()
+        tracker._text_model = MagicMock()
+
+        # Create mock outputs
+        mock_outputs = []
+        for i in range(3):
+            output = MagicMock()
+            output.frame_idx = i
+            mock_outputs.append(output)
+
+        tracker._text_model.propagate_in_video_iterator.return_value = iter(
+            mock_outputs
+        )
+        tracker._text_processor.postprocess_outputs.return_value = {
+            "object_ids": torch.tensor([1]),
+            "masks": torch.zeros(1, 100, 100),
+            "boxes": torch.tensor([[0, 0, 50, 50]]),
+            "scores": torch.tensor([0.9]),
+        }
+
+        # Track callback calls
+        callback_calls = []
+
+        def progress_callback(current, total):
+            callback_calls.append((current, total))
+
+        results = list(tracker.propagate(progress_callback=progress_callback))
+
+        assert len(results) == 3
+        assert len(callback_calls) == 3
+        assert callback_calls == [(1, 3), (2, 3), (3, 3)]
+
+    def test_propagate_show_progress_wraps_iterator(self):
+        """Test propagate with show_progress creates tqdm wrapper."""
+        tracker = SAM3Tracker()
+        tracker._inference_session = MagicMock()
+        tracker._streaming = False
+        tracker._use_text = True
+        tracker._video_height = 100
+        tracker._video_width = 100
+        tracker._num_frames = 2
+
+        tracker._text_processor = MagicMock()
+        tracker._text_model = MagicMock()
+        tracker._text_model.propagate_in_video_iterator.return_value = iter([])
+
+        # Just verify it doesn't crash with show_progress=True
+        results = list(tracker.propagate(show_progress=True))
+        assert results == []
+
+
+class TestSAM3TrackerAddPromptStreaming:
+    """Tests for add_prompt in streaming mode."""
+
+    def test_add_prompt_with_original_size_in_streaming(self):
+        """Test add_prompt passes original_size in streaming mode."""
+        tracker = SAM3Tracker()
+        tracker._inference_session = MagicMock()
+        tracker._use_text = False
+        tracker._streaming = True
+        mock_processor = MagicMock()
+        tracker._visual_processor = mock_processor
+
+        prompt = Prompt(
+            prompt_type=PromptType.ROI,
+            frame_idx=0,
+            obj_ids=[1],
+            masks=[np.ones((100, 100), dtype=np.uint8)],
+        )
+
+        tracker.add_prompt(prompt, original_size=(480, 640))
+
+        call_kwargs = mock_processor.add_inputs_to_inference_session.call_args[1]
+        assert call_kwargs["original_size"] == (480, 640)
+
+    def test_add_prompt_no_original_size_in_batch_mode(self):
+        """Test add_prompt does not pass original_size in batch mode."""
+        tracker = SAM3Tracker()
+        tracker._inference_session = MagicMock()
+        tracker._use_text = False
+        tracker._streaming = False
+        mock_processor = MagicMock()
+        tracker._visual_processor = mock_processor
+
+        prompt = Prompt(
+            prompt_type=PromptType.ROI,
+            frame_idx=0,
+            obj_ids=[1],
+            masks=[np.ones((100, 100), dtype=np.uint8)],
+        )
+
+        tracker.add_prompt(prompt, original_size=(480, 640))
+
+        call_kwargs = mock_processor.add_inputs_to_inference_session.call_args[1]
+        assert "original_size" not in call_kwargs
+
+
 # Helper to check if we should skip GPU tests
 def should_skip_gpu_tests():
     """Check if GPU tests should be skipped."""
@@ -388,7 +638,9 @@ def should_skip_gpu_tests():
     return False
 
 
-@pytest.mark.skipif(should_skip_gpu_tests(), reason="Requires GPU and not running on CI")
+@pytest.mark.skipif(
+    should_skip_gpu_tests(), reason="Requires GPU and not running on CI"
+)
 class TestSAM3TrackerIntegration:
     """Integration tests for SAM3Tracker (require GPU and model)."""
 

@@ -11,7 +11,7 @@ Progress tracking for `sam-track` implementation. See [Investigation Notes](scra
 - [x] 1.1.5 Test `uv sync` on Linux with CUDA
 - [x] 1.1.6 Test `uv sync` on macOS with Apple Silicon
 - [x] 1.1.7 Test `uv sync` on Windows with CUDA
-- [ ] 1.1.8 Document first-time setup in README.md
+- [x] 1.1.8 Document first-time setup in README.md
 
 ## Phase 2: Core Infrastructure
 

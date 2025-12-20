@@ -186,7 +186,7 @@ def auth(
         console.print("    - Select [bold]Read[/bold] permission (top tab, not fine-grained)")
         console.print()
         console.print("  [bold]Step 2:[/bold] Login with your token:")
-        console.print("    [cyan]sam-track auth --token hf_...[/cyan]")
+        console.print("    [cyan]uv run sam-track auth --token hf_...[/cyan]")
         console.print()
         console.print("  Alternatives:")
         console.print("    [cyan]uvx hf auth login[/cyan]  (interactive)")
@@ -204,13 +204,13 @@ def auth(
             f"https://huggingface.co/{SAM3_REPO_ID}[/link]"
         )
         console.print()
-        console.print("  After approval, run [cyan]sam-track auth[/cyan] again to verify.")
+        console.print("  After approval, run [cyan]uv run sam-track auth[/cyan] again to verify.")
 
     if not issues_found:
         console.print()
         console.print("[green]✓[/green] Ready to use SAM3!")
         console.print()
-        console.print("  Run [cyan]sam-track track <video> --text \"object\"[/cyan] to get started.")
+        console.print("  Run [cyan]uv run sam-track track <video> --text \"object\"[/cyan] to get started.")
     else:
         raise typer.Exit(1)
 

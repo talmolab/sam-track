@@ -111,6 +111,12 @@ def auth(
         "-l",
         help="Interactively login to HuggingFace Hub.",
     ),
+    token: str = typer.Option(
+        None,
+        "--token",
+        "-t",
+        help="HuggingFace token to use for login (alternative to interactive).",
+    ),
 ) -> None:
     """Check HuggingFace authentication status for SAM3 model access.
 
@@ -118,7 +124,7 @@ def auth(
     1. A HuggingFace account
     2. Accepting the model license at https://huggingface.co/facebook/sam3
 
-    Use --login to interactively authenticate.
+    Use --login to interactively authenticate, or --token to provide a token directly.
     """
     from .auth import (
         SAM3_REPO_ID,
@@ -126,16 +132,26 @@ def auth(
         check_model_access,
         get_username,
     )
-    from huggingface_hub import login as hf_login
+    from huggingface_hub import interpreter_login, login as hf_login
 
     # Handle login request first
-    if login:
+    if token:
+        console.print()
+        console.print("[bold]HuggingFace Login[/bold]")
+        try:
+            hf_login(token=token)
+            console.print("[green]Successfully logged in with provided token.[/green]")
+            console.print()
+        except Exception as e:
+            console.print(f"[red]Login failed: {e}[/red]")
+            raise typer.Exit(1)
+    elif login:
         console.print()
         console.print("[bold]HuggingFace Login[/bold]")
         console.print("Get your token from: https://huggingface.co/settings/tokens")
         console.print()
         try:
-            hf_login()
+            interpreter_login()
             console.print()
         except Exception as e:
             console.print(f"[red]Login failed: {e}[/red]")
@@ -177,9 +193,10 @@ def auth(
         console.print("[red]⚠ Not authenticated with HuggingFace Hub[/red]")
         console.print()
         console.print("  To authenticate, either:")
-        console.print("  1. Run: [cyan]sam-track auth --login[/cyan]")
-        console.print("  2. Run: [cyan]uv run huggingface-cli login[/cyan]")
-        console.print("  3. Set environment variable: [cyan]export HF_TOKEN=hf_...[/cyan]")
+        console.print("  1. Run: [cyan]sam-track auth --token hf_...[/cyan]")
+        console.print("  2. Run: [cyan]sam-track auth --login[/cyan]  (interactive)")
+        console.print("  3. Run: [cyan]uvx hf auth login[/cyan]")
+        console.print("  4. Set: [cyan]export HF_TOKEN=hf_...[/cyan]")
         console.print()
         console.print(
             "  Get your token from: [link=https://huggingface.co/settings/tokens]"

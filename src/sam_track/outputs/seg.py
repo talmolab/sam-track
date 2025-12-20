@@ -263,7 +263,7 @@ class SegmentationWriter:
         """Close the writer and finalize the file."""
         self.finalize()
 
-    def __enter__(self) -> "SegmentationWriter":
+    def __enter__(self) -> SegmentationWriter:
         """Context manager entry."""
         return self
 

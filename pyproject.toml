@@ -1,0 +1,17 @@
+[project]
+name = "sam-track"
+version = "0.1.0"
+description = "Simple CLI wrapper for tracking videos using SAM3."
+readme = "README.md"
+authors = [
+    { name = "Talmo Pereira", email = "talmo@talmolab.org" }
+]
+requires-python = ">=3.12"
+dependencies = []
+
+[project.scripts]
+sam-track = "sam_track:main"
+
+[build-system]
+requires = ["uv_build>=0.9.18,<0.10.0"]
+build-backend = "uv_build"

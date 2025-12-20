@@ -1,17 +1,98 @@
 [project]
 name = "sam-track"
 version = "0.1.0"
-description = "Simple CLI wrapper for tracking videos using SAM3."
+description = "Track objects in videos using SAM3 (Segment Anything Model 3)."
 readme = "README.md"
+license = { text = "BSD-3-Clause" }
 authors = [
     { name = "Talmo Pereira", email = "talmo@talmolab.org" }
 ]
+keywords = ["sam3", "video", "tracking", "segmentation", "deep learning"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: BSD License",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
 requires-python = ">=3.12"
-dependencies = []
+dependencies = [
+    # PyTorch ecosystem
+    "torch>=2.5.0",
+    "torchvision>=0.20.0",
+    # Hugging Face
+    "transformers>=4.47.0",
+    "huggingface-hub>=0.26.0",
+    "accelerate>=1.0.0",
+    # Video and data I/O
+    "sleap-io>=0.2.0",
+    "imageio>=2.34.0",
+    "imageio-ffmpeg>=0.5.1",
+    "h5py>=3.8.0",
+    "pyyaml>=6.0.0",
+    "numpy>=1.24.0",
+    # CLI
+    "typer>=0.12.0",
+    "rich>=13.0.0",
+    "click>=8.1.0",
+    "tqdm>=4.66.0",
+]
 
 [project.scripts]
-sam-track = "sam_track:main"
+sam-track = "sam_track.cli:app"
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0.0",
+    "pytest-cov>=4.0.0",
+    "ruff>=0.5.0",
+    "mypy>=1.10.0",
+]
 
 [build-system]
-requires = ["uv_build>=0.9.18,<0.10.0"]
-build-backend = "uv_build"
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/sam_track"]
+
+# =============================================================================
+# uv configuration for PyTorch with CUDA support
+# =============================================================================
+# Use CUDA 13.0 builds on Linux/Windows, fall back to PyPI on macOS (MPS)
+
+[[tool.uv.index]]
+name = "pytorch-cu130"
+url = "https://download.pytorch.org/whl/cu130"
+explicit = true
+
+[tool.uv.sources]
+torch = [
+    { index = "pytorch-cu130", marker = "sys_platform == 'linux' or sys_platform == 'win32'" },
+]
+torchvision = [
+    { index = "pytorch-cu130", marker = "sys_platform == 'linux' or sys_platform == 'win32'" },
+]
+
+# =============================================================================
+# Code quality tools
+# =============================================================================
+
+[tool.ruff]
+line-length = 88
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "W", "F", "I", "UP"]
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"
+
+[tool.mypy]
+python_version = "3.12"
+warn_return_any = true
+warn_unused_ignores = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

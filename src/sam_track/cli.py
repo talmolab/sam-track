@@ -119,16 +119,20 @@ def system() -> None:
     table.add_row("PyTorch version", torch.__version__)
     table.add_row("CUDA available", str(torch.cuda.is_available()))
 
+    # Check driver version - do this even if CUDA is not available
+    # because an old driver can cause CUDA to appear unavailable
+    driver_version = get_nvidia_driver_version()
     driver_warning = None
+
+    if driver_version:
+        is_compatible, min_version = check_driver_version(driver_version)
+        if is_compatible:
+            table.add_row("Driver version", f"{driver_version}")
+        else:
+            table.add_row("Driver version", f"[red]{driver_version}[/red]")
+            driver_warning = (driver_version, min_version)
+
     if torch.cuda.is_available():
-        driver_version = get_nvidia_driver_version()
-        if driver_version:
-            is_compatible, min_version = check_driver_version(driver_version)
-            if is_compatible:
-                table.add_row("Driver version", f"{driver_version}")
-            else:
-                table.add_row("Driver version", f"[red]{driver_version}[/red]")
-                driver_warning = (driver_version, min_version)
         table.add_row("CUDA version", torch.version.cuda or "N/A")
         table.add_row("cuDNN version", str(torch.backends.cudnn.version()))
         table.add_row("GPU count", str(torch.cuda.device_count()))
@@ -151,6 +155,10 @@ def system() -> None:
             "[yellow]  Please update your NVIDIA driver: "
             "https://www.nvidia.com/drivers[/yellow]"
         )
+        if not torch.cuda.is_available():
+            console.print(
+                "[yellow]  This is likely why CUDA is not available.[/yellow]"
+            )
 
     # GPU details
     if torch.cuda.is_available():

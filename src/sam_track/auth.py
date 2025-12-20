@@ -10,7 +10,7 @@ from rich.console import Console
 console = Console()
 
 # SAM3 model repository on HuggingFace Hub
-SAM3_REPO_ID = "facebook/sam2-hiera-large"
+SAM3_REPO_ID = "facebook/sam3"
 
 
 def check_authentication() -> bool:

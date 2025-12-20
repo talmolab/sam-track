@@ -192,16 +192,23 @@ def auth(
         console.print()
         console.print("[red]⚠ Not authenticated with HuggingFace Hub[/red]")
         console.print()
-        console.print("  To authenticate, either:")
-        console.print("  1. Run: [cyan]sam-track auth --token hf_...[/cyan]")
-        console.print("  2. Run: [cyan]sam-track auth --login[/cyan]  (interactive)")
-        console.print("  3. Run: [cyan]uvx hf auth login[/cyan]")
-        console.print("  4. Set: [cyan]export HF_TOKEN=hf_...[/cyan]")
-        console.print()
+        console.print("  [bold]Step 1:[/bold] Create a token at:")
         console.print(
-            "  Get your token from: [link=https://huggingface.co/settings/tokens]"
+            "    [link=https://huggingface.co/settings/tokens]"
             "https://huggingface.co/settings/tokens[/link]"
         )
+        console.print()
+        console.print("    - Click [bold]Create new token[/bold]")
+        console.print("    - Name it: [cyan]sam-track[/cyan]")
+        console.print("    - Select [bold]Read[/bold] permission (top tab, not fine-grained)")
+        console.print()
+        console.print("  [bold]Step 2:[/bold] Login with your token:")
+        console.print("    [cyan]sam-track auth --token hf_...[/cyan]")
+        console.print()
+        console.print("  Or use one of these alternatives:")
+        console.print("    [cyan]sam-track auth --login[/cyan]  (interactive prompt)")
+        console.print("    [cyan]uvx hf auth login[/cyan]")
+        console.print("    [cyan]export HF_TOKEN=hf_...[/cyan]")
 
     if is_authenticated and not has_model_access:
         issues_found = True

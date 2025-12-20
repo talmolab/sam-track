@@ -9,15 +9,52 @@ Track objects in videos using [SAM3](https://github.com/facebookresearch/sam3) (
 - **Pose prompts**: Track from [SLEAP](https://sleap.ai) pose labels
 - **Multiple outputs**: Bounding box tracks (JSON) and segmentation masks (HDF5)
 
+## Quick Start
+
+```bash
+git clone https://github.com/talmolab/sam-track && cd sam-track
+uv run sam-track system
+```
+
+Expected output (Linux with CUDA):
+```
+               System Information
+┌───────────────────┬─────────────────────────┐
+│ sam-track version │ 0.1.0                   │
+│ Python version    │ 3.12.x                  │
+│ Platform          │ Linux-...               │
+│ PyTorch version   │ 2.9.1+cu130             │
+│ CUDA available    │ True                    │
+│ Driver version    │ 580.xx.xx               │
+│ CUDA version      │ 13.0                    │
+│ ...               │                         │
+└───────────────────┴─────────────────────────┘
+
+✓ CUDA tensor operations working
+```
+
 ## Installation
 
-Requires Python 3.10+ and [uv](https://docs.astral.sh/uv/).
+Requires Python 3.12+ and [uv](https://docs.astral.sh/uv/).
 
 ```bash
 git clone https://github.com/talmolab/sam-track
 cd sam-track
 uv sync
 ```
+
+### GPU Requirements
+
+sam-track uses PyTorch with CUDA 13.0. Minimum driver versions:
+
+| Platform | Minimum Driver |
+|----------|----------------|
+| Linux    | 580.65.06      |
+| Windows  | 580.65         |
+
+macOS with Apple Silicon uses MPS (no driver required).
+
+Run `uv run sam-track system` to check your setup.
 
 ### First-time Setup
 

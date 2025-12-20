@@ -15,7 +15,7 @@ venv/
 ENV/
 
 # uv
-uv.lock
+# Note: uv.lock is committed for reproducible builds
 
 # Testing
 .pytest_cache/

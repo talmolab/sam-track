@@ -4,14 +4,14 @@ Progress tracking for `sam-track` implementation. See [Investigation Notes](scra
 
 ## Phase 1: Project Setup & Dependencies
 
-- [ ] 1.1.1 Create complete `pyproject.toml` with PyTorch platform markers
-- [ ] 1.1.2 Set up `.python-version` with Python 3.11
-- [ ] 1.1.3 Create `.gitignore` (Python, uv, HDF5, etc.)
-- [ ] 1.1.4 Create basic package structure in `src/sam_track/`
-- [ ] 1.1.5 Test `uv sync` on Linux with CUDA
-- [ ] 1.1.6 Test `uv sync` on macOS with Apple Silicon
-- [ ] 1.1.7 Test `uv sync` on Windows with CUDA
-- [ ] 1.1.8 Document first-time setup in README.md
+- [x] 1.1.1 Create complete `pyproject.toml` with PyTorch platform markers
+- [x] 1.1.2 Set up `.python-version` with Python 3.12
+- [x] 1.1.3 Create `.gitignore` (Python, uv, HDF5, etc.)
+- [x] 1.1.4 Create basic package structure in `src/sam_track/`
+- [x] 1.1.5 Test `uv sync` on Linux with CUDA
+- [x] 1.1.6 Test `uv sync` on macOS with Apple Silicon
+- [x] 1.1.7 Test `uv sync` on Windows with CUDA
+- [x] 1.1.8 Document first-time setup in README.md
 
 ## Phase 2: Core Infrastructure
 

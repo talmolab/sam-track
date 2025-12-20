@@ -2,7 +2,6 @@
 
 from pathlib import Path
 
-import numpy as np
 import pytest
 
 from sam_track.prompts import PosePromptHandler, Prompt, PromptType

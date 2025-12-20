@@ -11,12 +11,47 @@ from rich.table import Table
 
 from . import __version__
 
+# Minimum NVIDIA driver versions required for CUDA 13.0
+# See: https://docs.nvidia.com/cuda/archive/13.0.0/cuda-toolkit-release-notes/
+MIN_DRIVER_VERSION_LINUX = "580.65.06"
+MIN_DRIVER_VERSION_WINDOWS = "580.65"
+
 app = typer.Typer(
     name="sam-track",
     help="Track objects in videos using SAM3.",
     add_completion=False,
 )
 console = Console()
+
+
+def parse_driver_version(version: str) -> tuple[int, ...]:
+    """Parse driver version string into comparable tuple."""
+    try:
+        return tuple(int(x) for x in version.split("."))
+    except ValueError:
+        return (0,)
+
+
+def check_driver_version(driver_version: str) -> tuple[bool, str]:
+    """Check if driver version meets minimum requirements for CUDA 13.0.
+
+    Returns:
+        Tuple of (is_compatible, minimum_version).
+    """
+    if sys.platform == "win32":
+        min_version = MIN_DRIVER_VERSION_WINDOWS
+    else:
+        min_version = MIN_DRIVER_VERSION_LINUX
+
+    current = parse_driver_version(driver_version)
+    required = parse_driver_version(min_version)
+
+    # Pad tuples to same length for comparison
+    max_len = max(len(current), len(required))
+    current = current + (0,) * (max_len - len(current))
+    required = required + (0,) * (max_len - len(required))
+
+    return current >= required, min_version
 
 
 def get_nvidia_driver_version() -> str | None:
@@ -84,10 +119,16 @@ def system() -> None:
     table.add_row("PyTorch version", torch.__version__)
     table.add_row("CUDA available", str(torch.cuda.is_available()))
 
+    driver_warning = None
     if torch.cuda.is_available():
         driver_version = get_nvidia_driver_version()
         if driver_version:
-            table.add_row("Driver version", driver_version)
+            is_compatible, min_version = check_driver_version(driver_version)
+            if is_compatible:
+                table.add_row("Driver version", f"{driver_version}")
+            else:
+                table.add_row("Driver version", f"[red]{driver_version}[/red]")
+                driver_warning = (driver_version, min_version)
         table.add_row("CUDA version", torch.version.cuda or "N/A")
         table.add_row("cuDNN version", str(torch.backends.cudnn.version()))
         table.add_row("GPU count", str(torch.cuda.device_count()))
@@ -97,6 +138,19 @@ def system() -> None:
         table.add_row("MPS available", "True")
 
     console.print(table)
+
+    # Driver version warning
+    if driver_warning:
+        current, minimum = driver_warning
+        console.print()
+        console.print(
+            f"[red]⚠ Driver version {current} is below the minimum required "
+            f"({minimum}) for CUDA 13.0.[/red]"
+        )
+        console.print(
+            "[yellow]  Please update your NVIDIA driver: "
+            "https://www.nvidia.com/drivers[/yellow]"
+        )
 
     # GPU details
     if torch.cuda.is_available():

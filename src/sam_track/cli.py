@@ -104,6 +104,112 @@ def track(
 
 
 @app.command()
+def auth(
+    login: bool = typer.Option(
+        False,
+        "--login",
+        "-l",
+        help="Interactively login to HuggingFace Hub.",
+    ),
+) -> None:
+    """Check HuggingFace authentication status for SAM3 model access.
+
+    SAM3 is a gated model that requires:
+    1. A HuggingFace account
+    2. Accepting the model license at https://huggingface.co/facebook/sam3
+
+    Use --login to interactively authenticate.
+    """
+    from .auth import (
+        SAM3_REPO_ID,
+        check_authentication,
+        check_model_access,
+        get_username,
+    )
+    from huggingface_hub import login as hf_login
+
+    # Handle login request first
+    if login:
+        console.print()
+        console.print("[bold]HuggingFace Login[/bold]")
+        console.print("Get your token from: https://huggingface.co/settings/tokens")
+        console.print()
+        try:
+            hf_login()
+            console.print()
+        except Exception as e:
+            console.print(f"[red]Login failed: {e}[/red]")
+            raise typer.Exit(1)
+
+    # Check authentication status
+    is_authenticated = check_authentication()
+    username = get_username() if is_authenticated else None
+    has_model_access = check_model_access()
+
+    # Build status table
+    table = Table(title="HuggingFace Authentication Status", show_header=False)
+    table.add_column("Property", style="cyan")
+    table.add_column("Value", style="white")
+
+    # Authentication status
+    if is_authenticated:
+        table.add_row("Authenticated", "[green]Yes[/green]")
+        table.add_row("Username", username or "Unknown")
+    else:
+        table.add_row("Authenticated", "[red]No[/red]")
+
+    # Model access status
+    table.add_row("SAM3 model", SAM3_REPO_ID)
+    if has_model_access:
+        table.add_row("Model access", "[green]Granted[/green]")
+    else:
+        table.add_row("Model access", "[red]Not granted[/red]")
+
+    console.print()
+    console.print(table)
+
+    # Provide actionable guidance
+    issues_found = False
+
+    if not is_authenticated:
+        issues_found = True
+        console.print()
+        console.print("[red]⚠ Not authenticated with HuggingFace Hub[/red]")
+        console.print()
+        console.print("  To authenticate, either:")
+        console.print("  1. Run: [cyan]sam-track auth --login[/cyan]")
+        console.print("  2. Run: [cyan]uv run huggingface-cli login[/cyan]")
+        console.print("  3. Set environment variable: [cyan]export HF_TOKEN=hf_...[/cyan]")
+        console.print()
+        console.print(
+            "  Get your token from: [link=https://huggingface.co/settings/tokens]"
+            "https://huggingface.co/settings/tokens[/link]"
+        )
+
+    if is_authenticated and not has_model_access:
+        issues_found = True
+        console.print()
+        console.print("[red]⚠ No access to SAM3 model[/red]")
+        console.print()
+        console.print("  SAM3 is a gated model that requires accepting Meta's license.")
+        console.print()
+        console.print(
+            f"  Request access at: [link=https://huggingface.co/{SAM3_REPO_ID}]"
+            f"https://huggingface.co/{SAM3_REPO_ID}[/link]"
+        )
+        console.print()
+        console.print("  After approval, run [cyan]sam-track auth[/cyan] again to verify.")
+
+    if not issues_found:
+        console.print()
+        console.print("[green]✓[/green] Ready to use SAM3!")
+        console.print()
+        console.print("  Run [cyan]sam-track track <video> --text \"object\"[/cyan] to get started.")
+    else:
+        raise typer.Exit(1)
+
+
+@app.command()
 def system() -> None:
     """Display system information and GPU status."""
     import torch

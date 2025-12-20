@@ -58,14 +58,28 @@ Run `uv run sam-track system` to check your setup.
 
 ### First-time Setup
 
-SAM3 is a gated model requiring a HuggingFace account and access approval:
+SAM3 is a gated model requiring a HuggingFace account and access approval.
 
-1. Create a HuggingFace account at https://huggingface.co/join
-2. Go to https://huggingface.co/facebook/sam3 and fill out the access request form at the top of the page
-3. Login (will prompt you to create/enter a token):
+**Check your auth status:**
+```bash
+uv run sam-track auth
+```
+
+**If not authenticated:**
+
+1. Go to https://huggingface.co/settings/tokens
+2. Click **Create new token**
+3. Name it `sam-track` and select **Read** permission (top tab, not fine-grained)
+4. Login with your token:
    ```bash
-   uv run huggingface-cli login
+   uv run sam-track auth --token hf_...
    ```
+
+**If no model access:**
+
+1. Go to https://huggingface.co/facebook/sam3
+2. Fill out the access request form and accept the license
+3. Run `uv run sam-track auth` again to verify
 
 ## Usage
 

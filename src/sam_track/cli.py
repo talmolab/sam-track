@@ -1,7 +1,11 @@
 """sam-track CLI using Typer."""
 
+import platform
+import sys
+
 import typer
 from rich.console import Console
+from rich.table import Table
 
 from . import __version__
 
@@ -40,8 +44,81 @@ def track(
     video: str = typer.Argument(..., help="Path to input video file."),
 ) -> None:
     """Track objects in a video using SAM3."""
-    console.print(f"[yellow]sam-track is not yet implemented.[/yellow]")
+    console.print("[yellow]sam-track is not yet implemented.[/yellow]")
     console.print(f"Would track: {video}")
+
+
+@app.command()
+def system() -> None:
+    """Display system information and GPU status."""
+    import torch
+
+    # System info table
+    table = Table(title="System Information", show_header=False)
+    table.add_column("Property", style="cyan")
+    table.add_column("Value", style="white")
+
+    table.add_row("sam-track version", __version__)
+    table.add_row("Python version", sys.version.split()[0])
+    table.add_row("Platform", platform.platform())
+    table.add_row("PyTorch version", torch.__version__)
+    table.add_row("CUDA available", str(torch.cuda.is_available()))
+
+    if torch.cuda.is_available():
+        table.add_row("CUDA version", torch.version.cuda or "N/A")
+        table.add_row("cuDNN version", str(torch.backends.cudnn.version()))
+        table.add_row("GPU count", str(torch.cuda.device_count()))
+
+    # Check for MPS (Apple Silicon)
+    if hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+        table.add_row("MPS available", "True")
+
+    console.print(table)
+
+    # GPU details
+    if torch.cuda.is_available():
+        console.print()
+        gpu_table = Table(title="GPU Details")
+        gpu_table.add_column("ID", style="cyan")
+        gpu_table.add_column("Name", style="white")
+        gpu_table.add_column("Compute Cap.", style="green")
+        gpu_table.add_column("Memory", style="yellow")
+
+        for i in range(torch.cuda.device_count()):
+            props = torch.cuda.get_device_properties(i)
+            memory_gb = props.total_memory / (1024**3)
+            gpu_table.add_row(
+                str(i),
+                props.name,
+                f"{props.major}.{props.minor}",
+                f"{memory_gb:.1f} GB",
+            )
+
+        console.print(gpu_table)
+
+        # Quick functionality test
+        console.print()
+        try:
+            x = torch.randn(100, 100, device="cuda")
+            y = torch.randn(100, 100, device="cuda")
+            _ = torch.mm(x, y)
+            console.print("[green]✓[/green] CUDA tensor operations working")
+        except Exception as e:
+            console.print(f"[red]✗[/red] CUDA tensor operations failed: {e}")
+
+    elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+        console.print()
+        try:
+            x = torch.randn(100, 100, device="mps")
+            y = torch.randn(100, 100, device="mps")
+            _ = torch.mm(x, y)
+            console.print("[green]✓[/green] MPS tensor operations working")
+        except Exception as e:
+            console.print(f"[red]✗[/red] MPS tensor operations failed: {e}")
+
+    else:
+        console.print()
+        console.print("[yellow]![/yellow] No GPU acceleration available, using CPU")
 
 
 if __name__ == "__main__":

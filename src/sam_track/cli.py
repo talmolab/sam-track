@@ -1,6 +1,8 @@
 """sam-track CLI using Typer."""
 
 import platform
+import shutil
+import subprocess
 import sys
 
 import typer
@@ -15,6 +17,24 @@ app = typer.Typer(
     add_completion=False,
 )
 console = Console()
+
+
+def get_nvidia_driver_version() -> str | None:
+    """Get NVIDIA driver version from nvidia-smi."""
+    if not shutil.which("nvidia-smi"):
+        return None
+    try:
+        result = subprocess.run(
+            ["nvidia-smi", "--query-gpu=driver_version", "--format=csv,noheader"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        if result.returncode == 0:
+            return result.stdout.strip().split("\n")[0]
+    except Exception:
+        pass
+    return None
 
 
 def version_callback(value: bool) -> None:
@@ -65,6 +85,9 @@ def system() -> None:
     table.add_row("CUDA available", str(torch.cuda.is_available()))
 
     if torch.cuda.is_available():
+        driver_version = get_nvidia_driver_version()
+        if driver_version:
+            table.add_row("Driver version", driver_version)
         table.add_row("CUDA version", torch.version.cuda or "N/A")
         table.add_row("cuDNN version", str(torch.backends.cudnn.version()))
         table.add_row("GPU count", str(torch.cuda.device_count()))

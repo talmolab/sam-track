@@ -407,7 +407,7 @@ def _run_tracking(
         prompt_type_str = "text"
         prompt_value_str = text
     elif roi:
-        prompt_handler = ROIPromptHandler(roi, image_size=(video_height, video_width))
+        prompt_handler = ROIPromptHandler(roi)
         prompt = prompt_handler.load()
         use_text = False
         prompt_type_str = "roi"

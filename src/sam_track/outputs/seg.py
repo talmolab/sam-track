@@ -194,7 +194,11 @@ class SegmentationWriter:
 
         if num_objects > 0:
             # Store masks (pad/truncate to max_objects)
-            masks = result.masks[:num_objects].astype(np.uint8)
+            # Squeeze extra dimensions (SAM3 returns shape (N, 1, H, W))
+            masks = np.squeeze(result.masks[:num_objects]).astype(np.uint8)
+            # Handle single object case where squeeze removes too much
+            if masks.ndim == 2:
+                masks = masks[np.newaxis, ...]
             self._masks_dset[row_idx, :num_objects] = masks
 
             # Store track IDs

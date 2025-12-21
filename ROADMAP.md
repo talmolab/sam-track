@@ -63,7 +63,8 @@ Progress tracking for `sam-track` implementation. See [Investigation Notes](scra
 - [x] 6.2.2 Add --max-frames option
 - [x] 6.2.3 Add verbose/quiet mode
 - [x] 6.3.1 Handle CUDA OOM gracefully
-- [ ] 6.3.2 Add batch processing mode
+- [x] 6.3.2 Add streaming mode as default (--preload for batch mode)
+- [ ] 6.3.3 Add batch processing mode (multiple videos)
 
 ## Phase 7: Testing & CI/CD
 
@@ -89,6 +90,6 @@ Progress tracking for `sam-track` implementation. See [Investigation Notes](scra
 
 - [ ] Text prompt re-detection frequency (first frame only vs periodic)
 - [ ] Multi-object handling from single text prompt
-- [ ] Streaming mode for long videos
+- [x] Streaming mode for long videos → **Decided: streaming is default, --preload for batch**
 - [x] ROI prompt type → **Decided: polygon-to-mask conversion** (best accuracy)
 - [ ] Graceful shutdown with partial saves

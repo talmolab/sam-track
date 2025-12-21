@@ -300,7 +300,7 @@ class TestSAM3TrackerAddPromptFormats:
         mock_processor.add_inputs_to_inference_session.assert_called_once()
         call_kwargs = mock_processor.add_inputs_to_inference_session.call_args[1]
         assert "input_masks" in call_kwargs
-        assert call_kwargs["obj_ids"] == 1
+        assert call_kwargs["obj_ids"] == [1]  # Now passed as list for batching
         assert call_kwargs["frame_idx"] == 0
 
     def test_add_prompt_with_points(self):
@@ -370,8 +370,11 @@ class TestSAM3TrackerAddPromptFormats:
 
         tracker.add_prompt(prompt)
 
-        # Should be called once per object
-        assert mock_processor.add_inputs_to_inference_session.call_count == 3
+        # Should be called once with all objects batched together
+        assert mock_processor.add_inputs_to_inference_session.call_count == 1
+        call_kwargs = mock_processor.add_inputs_to_inference_session.call_args[1]
+        assert call_kwargs["obj_ids"] == [1, 2, 3]
+        assert len(call_kwargs["input_masks"]) == 3
 
 
 class TestSAM3TrackerStreamingMode:

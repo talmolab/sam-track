@@ -347,6 +347,11 @@ class SAM3Tracker:
             output.object_score_logits, torch.Tensor
         ):
             scores = torch.sigmoid(output.object_score_logits).float().cpu().numpy()
+            # Squeeze extra dimensions (SAM3 may return shape (N, 1))
+            scores = np.squeeze(scores)
+            # Handle single object case
+            if scores.ndim == 0:
+                scores = np.array([float(scores)])
         else:
             scores = np.ones(len(obj_ids))
 
@@ -415,45 +420,49 @@ class SAM3Tracker:
                 "Use init_session(use_text=False) for visual prompts."
             )
 
-        # Add prompts for each object
-        for i, obj_id in enumerate(prompt.obj_ids):
-            # Prepare inputs for this object
-            kwargs: dict = {
-                "inference_session": self._inference_session,
-                "frame_idx": prompt.frame_idx,
-                "obj_ids": obj_id,
-            }
+        # Prepare base kwargs
+        kwargs: dict = {
+            "inference_session": self._inference_session,
+            "frame_idx": prompt.frame_idx,
+            "obj_ids": prompt.obj_ids,  # Pass all object IDs at once
+        }
 
-            # Add original_size for streaming mode
-            if self._streaming and original_size is not None:
-                kwargs["original_size"] = original_size
+        # Add original_size for streaming mode
+        if self._streaming and original_size is not None:
+            kwargs["original_size"] = original_size
 
-            # Add mask if available (preferred - most accurate)
-            if prompt.masks is not None and i < len(prompt.masks):
-                kwargs["input_masks"] = prompt.masks[i]
+        # Add masks if available (preferred - most accurate)
+        # Note: Masks must be batched in a single call for SAM3 to work correctly
+        if prompt.masks is not None and len(prompt.masks) > 0:
+            kwargs["input_masks"] = prompt.masks
 
-            # Add points if available
-            elif prompt.points is not None and i < len(prompt.points):
-                points = prompt.points[i]
-                # Format: [[[[x, y], [x, y], ...]]]
-                kwargs["input_points"] = [[[[p[0], p[1]] for p in points]]]
-                # All points are positive (foreground)
-                kwargs["input_labels"] = [[[1] * len(points)]]
+        # Add points if available (when no masks)
+        elif prompt.points is not None and len(prompt.points) > 0:
+            # Format for batched points: [[obj1_points, obj2_points, ...]]
+            # Each obj_points is [[x, y], [x, y], ...]
+            all_points = []
+            all_labels = []
+            for points in prompt.points:
+                all_points.append([[p[0], p[1]] for p in points])
+                all_labels.append([1] * len(points))  # All positive
+            kwargs["input_points"] = [all_points]
+            kwargs["input_labels"] = [all_labels]
 
-            # Add box if available
-            elif prompt.boxes is not None and i < len(prompt.boxes):
-                box = prompt.boxes[i]
-                # Format: [[[x_min, y_min, x_max, y_max]]]
-                kwargs["input_boxes"] = [[[box[0], box[1], box[2], box[3]]]]
+        # Add boxes if available (when no masks or points)
+        elif prompt.boxes is not None and len(prompt.boxes) > 0:
+            # Format for batched boxes: [[box1, box2, ...]]
+            all_boxes = []
+            for box in prompt.boxes:
+                all_boxes.append([box[0], box[1], box[2], box[3]])
+            kwargs["input_boxes"] = [all_boxes]
 
-            else:
-                raise ValueError(
-                    f"No valid prompt data for object {obj_id}. "
-                    "Prompt must have masks, points, or boxes."
-                )
+        else:
+            raise ValueError(
+                "No valid prompt data. Prompt must have masks, points, or boxes."
+            )
 
-            # Add to session
-            self._visual_processor.add_inputs_to_inference_session(**kwargs)
+        # Add all prompts in a single batched call
+        self._visual_processor.add_inputs_to_inference_session(**kwargs)
 
         # Track the prompt frame for propagation
         if self._prompt_frame_idx is None:
@@ -570,15 +579,11 @@ class SAM3Tracker:
         progress_callback: Callable[[int, int], None] | None,
     ) -> Iterator[TrackingResult]:
         """Propagate visual prompts through video."""
-        # Run inference on the prompt frame first to initialize tracking
-        if self._prompt_frame_idx is not None:
-            self._visual_model(
-                inference_session=self._inference_session,
-                frame_idx=self._prompt_frame_idx,
-            )
-
+        # Note: propagate_in_video_iterator handles the initial conditioning frame
+        # automatically - no need to call model() explicitly before propagation.
         iterator = self._visual_model.propagate_in_video_iterator(
             inference_session=self._inference_session,
+            start_frame_idx=self._prompt_frame_idx,
             max_frame_num_to_track=max_frames,
             reverse=reverse,
         )
@@ -615,6 +620,11 @@ class SAM3Tracker:
                 output.object_score_logits, torch.Tensor
             ):
                 scores = torch.sigmoid(output.object_score_logits).float().cpu().numpy()
+                # Squeeze extra dimensions (SAM3 may return shape (N, 1))
+                scores = np.squeeze(scores)
+                # Handle single object case
+                if scores.ndim == 0:
+                    scores = np.array([float(scores)])
             else:
                 # Default to 1.0 if no scores available
                 scores = np.ones(len(obj_ids))
@@ -635,20 +645,23 @@ class SAM3Tracker:
         """Compute bounding boxes from binary masks.
 
         Args:
-            masks: Binary masks, shape (N, H, W).
+            masks: Binary masks, shape (N, H, W) or (N, 1, H, W).
 
         Returns:
             Array of bounding boxes in XYXY format, shape (N, 4).
         """
         boxes = []
         for mask in masks:
+            # Squeeze any extra dimensions (SAM3 outputs shape (1, H, W) per object)
+            mask = np.squeeze(mask)
+
             if mask.sum() == 0:
                 # Empty mask - return zero box
                 boxes.append([0.0, 0.0, 0.0, 0.0])
             else:
-                # Find bounding box from mask
-                rows = np.any(mask, axis=1)
-                cols = np.any(mask, axis=0)
+                # Find bounding box from mask (H, W) where rows=Y, cols=X
+                rows = np.any(mask, axis=1)  # Shape (H,) - which rows have content
+                cols = np.any(mask, axis=0)  # Shape (W,) - which cols have content
                 y_min, y_max = np.where(rows)[0][[0, -1]]
                 x_min, x_max = np.where(cols)[0][[0, -1]]
                 boxes.append([float(x_min), float(y_min), float(x_max), float(y_max)])

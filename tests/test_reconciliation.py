@@ -12,7 +12,6 @@ from sam_track.reconciliation import (
     SwapEvent,
     TrackAssignment,
     default_match_predicate,
-    require_centroid_proximity,
     require_min_fraction_inside,
     require_min_keypoints_inside,
     require_reasonable_mask_area,

@@ -19,7 +19,7 @@ import pytest
 import sleap_io as sio
 
 from sam_track.prompts.pose import PosePromptHandler
-from sam_track.reconciliation import IDReconciler, TrackAssignment
+from sam_track.reconciliation import IDReconciler
 
 # Test data directory
 DATA_DIR = Path(__file__).parent / "data"
@@ -353,7 +353,7 @@ class TestUC5PredictionsOnly:
 
         for lf in labels.labeled_frames[:10]:  # Sample first 10
             for inst in lf.instances:
-                assert type(inst) == sio.PredictedInstance, (
+                assert type(inst) is sio.PredictedInstance, (
                     f"Expected PredictedInstance, got {type(inst).__name__}"
                 )
 
@@ -413,9 +413,9 @@ class TestUC7MixedGTPredictions:
 
         for lf in labels.labeled_frames:
             for inst in lf.instances:
-                if type(inst) == sio.Instance:
+                if type(inst) is sio.Instance:
                     has_gt = True
-                elif type(inst) == sio.PredictedInstance:
+                elif type(inst) is sio.PredictedInstance:
                     has_pred = True
 
             if has_gt and has_pred:
@@ -433,7 +433,7 @@ class TestUC7MixedGTPredictions:
 
         for lf in labels.labeled_frames:
             for inst in lf.instances:
-                if type(inst) == sio.Instance:
+                if type(inst) is sio.Instance:
                     total_gt += 1
                     if inst.track is not None:
                         gt_with_tracks += 1
@@ -481,22 +481,22 @@ class TestUC7MixedGTPredictions:
 
         gt_frame_indices = set()
         for lf in labels.labeled_frames:
-            if any(type(i) == sio.Instance for i in lf.instances):
+            if any(type(i) is sio.Instance for i in lf.instances):
                 gt_frame_indices.add(lf.frame_idx)
 
         # Find a frame with only predictions (not in GT frames)
         for frame_idx in handler.labeled_frame_indices:
             if frame_idx not in gt_frame_indices:
                 prompt = handler.get_prompt(frame_idx)
-                assert prompt is not None, f"Frame {frame_idx} should have prompt from predictions"
+                assert prompt is not None, (
+                    f"Frame {frame_idx} should have prompt from predictions"
+                )
                 break
         else:
             pytest.skip("No prediction-only frames found")
 
     def test_gt_track_names_preserved(self):
         """UC7: Final output should respect GT track names."""
-        handler = PosePromptHandler(UC7_FIXTURE)
-
         expected_tracks = {"mouse1", "mouse2"}
         found_tracks = set()
 
@@ -504,7 +504,7 @@ class TestUC7MixedGTPredictions:
         labels = sio.load_slp(str(UC7_FIXTURE), open_videos=False)
         for lf in labels.labeled_frames:
             for inst in lf.instances:
-                if type(inst) == sio.Instance and inst.track:
+                if type(inst) is sio.Instance and inst.track:
                     found_tracks.add(inst.track.name)
 
         assert expected_tracks == found_tracks, (
@@ -518,7 +518,7 @@ class TestReconciliationIntegration:
     def test_reconciler_works_with_uc4(self):
         """IDReconciler should handle UC4 multi-frame GT with tracks."""
         if not UC4_FIXTURE.exists():
-            pytest.skip(f"UC4 fixture not found")
+            pytest.skip("UC4 fixture not found")
 
         handler = PosePromptHandler(UC4_FIXTURE)
         labels = sio.load_slp(str(UC4_FIXTURE), open_videos=False)

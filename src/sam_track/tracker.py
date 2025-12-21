@@ -496,7 +496,9 @@ class SAM3Tracker:
             ValueError: If prompt type is TEXT.
         """
         if not self.is_session_active:
-            raise RuntimeError("No active session. Call init_streaming_session() first.")
+            raise RuntimeError(
+                "No active session. Call init_streaming_session() first."
+            )
 
         if not self._streaming:
             raise RuntimeError(

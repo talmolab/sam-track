@@ -141,8 +141,8 @@ class PosePromptHandler(PromptHandler):
         # Separate GT from predictions (CRITICAL: use type(), not isinstance())
         # PredictedInstance is a subclass of Instance, so isinstance() would
         # match both types. We need exact type checking.
-        gt_instances = [i for i in lf.instances if type(i) == sio.Instance]
-        pred_instances = [i for i in lf.instances if type(i) == sio.PredictedInstance]
+        gt_instances = [i for i in lf.instances if type(i) is sio.Instance]
+        pred_instances = [i for i in lf.instances if type(i) is sio.PredictedInstance]
 
         # GT takes precedence - if any GT exists, ignore predictions
         instances = gt_instances if gt_instances else pred_instances

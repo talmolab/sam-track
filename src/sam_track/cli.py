@@ -345,7 +345,9 @@ def track(
             console.print("[red]Error: --exclude-nodes is only valid with --pose[/red]")
             raise typer.Exit(1)
         if filter_by_pose:
-            console.print("[red]Error: --filter-by-pose is only valid with --pose[/red]")
+            console.print(
+                "[red]Error: --filter-by-pose is only valid with --pose[/red]"
+            )
             raise typer.Exit(1)
 
     # Validate ROI file exists
@@ -368,7 +370,8 @@ def track(
     # === Setup ===
     if not quiet:
         _print_config(
-            video, text, roi, pose, bbox_path, seg_path, slp_path, device, max_frames, preload
+            video, text, roi, pose, bbox_path, seg_path, slp_path,
+            device, max_frames, preload,
         )
 
     # Register signal handler for graceful shutdown
@@ -751,10 +754,10 @@ def _run_tracking_streaming(
                     import sleap_io as sio
 
                     gt_instances = [
-                        i for i in lf.instances if type(i) == sio.Instance
+                        i for i in lf.instances if type(i) is sio.Instance
                     ]
                     pred_instances = [
-                        i for i in lf.instances if type(i) == sio.PredictedInstance
+                        i for i in lf.instances if type(i) is sio.PredictedInstance
                     ]
                     instances = gt_instances if gt_instances else pred_instances
 
@@ -921,10 +924,10 @@ def _run_tracking_preload(
                     import sleap_io as sio
 
                     gt_instances = [
-                        i for i in lf.instances if type(i) == sio.Instance
+                        i for i in lf.instances if type(i) is sio.Instance
                     ]
                     pred_instances = [
-                        i for i in lf.instances if type(i) == sio.PredictedInstance
+                        i for i in lf.instances if type(i) is sio.PredictedInstance
                     ]
                     instances = gt_instances if gt_instances else pred_instances
 

@@ -230,7 +230,10 @@ def track(
         bool,
         typer.Option(
             "--preload",
-            help="Preload all video frames before tracking. Uses more memory but may be slightly faster for text prompts. Default is streaming mode (memory-efficient).",
+            help=(
+                "Preload all video frames before tracking. "
+                "Uses more memory but may be slightly faster for text prompts."
+            ),
         ),
     ] = False,
 ) -> None:
@@ -399,7 +402,6 @@ def _run_tracking(
     """
     global _interrupted
 
-    import numpy as np
     from sleap_io import Video
 
     from .outputs import BBoxWriter, SegmentationWriter

@@ -226,22 +226,36 @@ def track(
             help="Suppress progress output.",
         ),
     ] = False,
+    preload: Annotated[
+        bool,
+        typer.Option(
+            "--preload",
+            help="Preload all video frames before tracking. Uses more memory but may be slightly faster for text prompts. Default is streaming mode (memory-efficient).",
+        ),
+    ] = False,
 ) -> None:
     """Track objects in a video using SAM3.
 
     Requires exactly one prompt type (--text, --roi, or --pose) and at least
     one output format (--bbox or --seg).
 
+    By default, uses streaming mode which processes frames one at a time for
+    memory efficiency. Use --preload to load all frames upfront (slightly
+    faster for text prompts, but uses more memory).
+
     Examples:
 
-        # Track with text prompt, output bounding boxes
-        uv run sam-track video.mp4 --text "mouse" --bbox
+        # Track with text prompt, output bounding boxes (streaming mode)
+        uv run sam-track track video.mp4 --text "mouse" --bbox
 
         # Track with ROI file, output both formats
-        uv run sam-track video.mp4 --roi rois.yml --bbox --seg
+        uv run sam-track track video.mp4 --roi rois.yml --bbox --seg
 
         # Track with pose file, custom output path
-        uv run sam-track video.mp4 --pose labels.slp --bbox results.json
+        uv run sam-track track video.mp4 --pose labels.slp --bbox results.json
+
+        # Use preload mode for faster text prompt processing
+        uv run sam-track track video.mp4 --text "mouse" --bbox --preload
     """
     global _interrupted
     _interrupted = False
@@ -292,7 +306,9 @@ def track(
 
     # === Setup ===
     if not quiet:
-        _print_config(video, text, roi, pose, bbox_path, seg_path, device, max_frames)
+        _print_config(
+            video, text, roi, pose, bbox_path, seg_path, device, max_frames, preload
+        )
 
     # Register signal handler for graceful shutdown
     original_handler = signal.signal(signal.SIGINT, _signal_handler)
@@ -308,6 +324,7 @@ def track(
             device=device,
             max_frames=max_frames,
             quiet=quiet,
+            preload=preload,
         )
     except KeyboardInterrupt:
         # Already handled by signal handler
@@ -330,6 +347,7 @@ def _print_config(
     seg_path: Path | None,
     device: str | None,
     max_frames: int | None,
+    preload: bool,
 ) -> None:
     """Print configuration summary."""
     table = Table.grid(padding=(0, 2))
@@ -350,6 +368,7 @@ def _print_config(
     if seg_path:
         table.add_row("Seg output:", str(seg_path))
 
+    table.add_row("Mode:", "preload" if preload else "streaming")
     if device:
         table.add_row("Device:", device)
     if max_frames:
@@ -370,8 +389,14 @@ def _run_tracking(
     device: str | None,
     max_frames: int | None,
     quiet: bool,
+    preload: bool,
 ) -> None:
-    """Run the tracking pipeline."""
+    """Run the tracking pipeline.
+
+    Supports two modes:
+    - Streaming (default): Memory-efficient frame-by-frame processing.
+    - Preload: Load all frames upfront, slightly faster for text prompts.
+    """
     global _interrupted
 
     import numpy as np
@@ -465,108 +490,33 @@ def _run_tracking(
         )
 
     try:
-        # Load video frames
-        if not quiet:
-            console.print("Loading video frames...")
-
-        video_frames = []
-        for i in range(frames_to_process):
-            if _interrupted:
-                break
-            frame = vid[i]
-            # Ensure RGB format
-            if frame.ndim == 2:
-                frame = np.stack([frame] * 3, axis=-1)
-            elif frame.shape[-1] == 4:
-                frame = frame[..., :3]
-            video_frames.append(frame)
-
-        if _interrupted:
-            console.print("[yellow]Interrupted during frame loading[/yellow]")
-            return
-
-        # Initialize tracking session
-        if not quiet:
-            console.print("Initializing tracking session...")
-
-        tracker.init_session(
-            video_frames=video_frames,
-            use_text=use_text,
-            video_storage_device="cpu",
-            max_vision_cache_size=4,
-        )
-
-        # Add prompt
-        if use_text:
-            tracker.add_text_prompt(prompt.text)
+        if preload:
+            _run_tracking_preload(
+                vid=vid,
+                tracker=tracker,
+                prompt=prompt,
+                use_text=use_text,
+                video_height=video_height,
+                video_width=video_width,
+                frames_to_process=frames_to_process,
+                max_frames=max_frames,
+                bbox_writer=bbox_writer,
+                seg_writer=seg_writer,
+                quiet=quiet,
+            )
         else:
-            tracker.add_prompt(prompt)
-
-        # Run tracking with progress
-        if not quiet:
-            console.print("Tracking...")
-            console.print()
-
-        frames_processed = 0
-        total_objects = 0
-
-        progress = Progress(
-            TextColumn("[bold blue]{task.description}"),
-            BarColumn(),
-            MofNCompleteColumn(),
-            FPSColumn(),
-            ObjectsColumn(),
-            TimeElapsedColumn(),
-            TimeRemainingColumn(),
-            console=console,
-            disable=quiet,
-        )
-
-        with progress:
-            task = progress.add_task("Processing", total=frames_to_process)
-
-            for result in tracker.propagate(max_frames=max_frames):
-                if _interrupted:
-                    break
-
-                # Update outputs
-                if bbox_writer:
-                    bbox_writer.add_result(result)
-                if seg_writer:
-                    seg_writer.add_result(result)
-
-                frames_processed += 1
-                total_objects = max(total_objects, result.num_objects)
-
-                progress.update(task, advance=1, objects=result.num_objects)
-
-        # Save outputs
-        if not quiet:
-            console.print()
-
-        if bbox_writer:
-            bbox_writer.save()
-            if not quiet:
-                console.print(f"[green]Saved bounding boxes:[/green] {bbox_path}")
-
-        if seg_writer:
-            seg_writer.finalize()
-            if not quiet:
-                console.print(f"[green]Saved segmentation masks:[/green] {seg_path}")
-
-        # Summary
-        if not quiet:
-            console.print()
-            if _interrupted:
-                console.print(
-                    f"[yellow]Processed {frames_processed}/{frames_to_process} frames "
-                    f"(interrupted)[/yellow]"
-                )
-            else:
-                console.print(
-                    f"[green]Processed {frames_processed} frames, "
-                    f"{total_objects} objects tracked[/green]"
-                )
+            _run_tracking_streaming(
+                vid=vid,
+                tracker=tracker,
+                prompt=prompt,
+                use_text=use_text,
+                video_height=video_height,
+                video_width=video_width,
+                frames_to_process=frames_to_process,
+                bbox_writer=bbox_writer,
+                seg_writer=seg_writer,
+                quiet=quiet,
+            )
 
     except Exception as e:
         # Check for CUDA OOM specifically
@@ -580,6 +530,10 @@ def _run_tracking(
             console.print("  1. Use --max-frames to process fewer frames")
             console.print("  2. Use a GPU with more memory")
             console.print("  3. Close other GPU applications")
+            if preload:
+                console.print(
+                    "  4. Remove --preload flag (streaming mode uses less memory)"
+                )
             raise typer.Exit(1)
         console.print()
         console.print(f"[red]Error during tracking: {e}[/red]")
@@ -589,6 +543,247 @@ def _run_tracking(
         tracker.close()
         if seg_writer:
             seg_writer.close()
+
+
+def _run_tracking_streaming(
+    vid,
+    tracker,
+    prompt,
+    use_text: bool,
+    video_height: int,
+    video_width: int,
+    frames_to_process: int,
+    bbox_writer,
+    seg_writer,
+    quiet: bool,
+) -> None:
+    """Run tracking in streaming mode (frame-by-frame, memory-efficient)."""
+    global _interrupted
+
+    import numpy as np
+
+    # Initialize streaming session
+    if not quiet:
+        console.print("Initializing streaming session...")
+
+    tracker.init_streaming_session(
+        use_text=use_text,
+        num_frames=frames_to_process,
+    )
+
+    # Add prompt
+    # For visual prompts in streaming mode, we need to pass original_size
+    if use_text:
+        tracker.add_text_prompt(prompt.text)
+    else:
+        tracker.add_prompt(prompt, original_size=(video_height, video_width))
+
+    # Run tracking with progress
+    if not quiet:
+        console.print("Tracking...")
+        console.print()
+
+    frames_processed = 0
+    total_objects = 0
+
+    progress = Progress(
+        TextColumn("[bold blue]{task.description}"),
+        BarColumn(),
+        MofNCompleteColumn(),
+        FPSColumn(),
+        ObjectsColumn(),
+        TimeElapsedColumn(),
+        TimeRemainingColumn(),
+        console=console,
+        disable=quiet,
+    )
+
+    with progress:
+        task = progress.add_task("Processing", total=frames_to_process)
+
+        for frame_idx in range(frames_to_process):
+            if _interrupted:
+                break
+
+            # Load single frame
+            frame = vid[frame_idx]
+
+            # Ensure RGB format
+            if frame.ndim == 2:
+                frame = np.stack([frame] * 3, axis=-1)
+            elif frame.shape[-1] == 4:
+                frame = frame[..., :3]
+
+            # Process frame
+            result = tracker.process_frame(frame)
+
+            # Update outputs
+            if bbox_writer:
+                bbox_writer.add_result(result)
+            if seg_writer:
+                seg_writer.add_result(result)
+
+            frames_processed += 1
+            total_objects = max(total_objects, result.num_objects)
+
+            progress.update(task, advance=1, objects=result.num_objects)
+
+    # Save outputs
+    _save_outputs(
+        bbox_writer=bbox_writer,
+        seg_writer=seg_writer,
+        frames_processed=frames_processed,
+        frames_to_process=frames_to_process,
+        total_objects=total_objects,
+        quiet=quiet,
+    )
+
+
+def _run_tracking_preload(
+    vid,
+    tracker,
+    prompt,
+    use_text: bool,
+    video_height: int,
+    video_width: int,
+    frames_to_process: int,
+    max_frames: int | None,
+    bbox_writer,
+    seg_writer,
+    quiet: bool,
+) -> None:
+    """Run tracking in preload mode (all frames loaded upfront)."""
+    global _interrupted
+
+    import numpy as np
+
+    # Load video frames
+    if not quiet:
+        console.print("Loading video frames...")
+
+    video_frames = []
+    for i in range(frames_to_process):
+        if _interrupted:
+            break
+        frame = vid[i]
+        # Ensure RGB format
+        if frame.ndim == 2:
+            frame = np.stack([frame] * 3, axis=-1)
+        elif frame.shape[-1] == 4:
+            frame = frame[..., :3]
+        video_frames.append(frame)
+
+    if _interrupted:
+        console.print("[yellow]Interrupted during frame loading[/yellow]")
+        return
+
+    # Initialize tracking session
+    if not quiet:
+        console.print("Initializing tracking session...")
+
+    tracker.init_session(
+        video_frames=video_frames,
+        use_text=use_text,
+        video_storage_device="cpu",
+        max_vision_cache_size=4,
+    )
+
+    # Add prompt
+    if use_text:
+        tracker.add_text_prompt(prompt.text)
+    else:
+        tracker.add_prompt(prompt)
+
+    # Run tracking with progress
+    if not quiet:
+        console.print("Tracking...")
+        console.print()
+
+    frames_processed = 0
+    total_objects = 0
+
+    progress = Progress(
+        TextColumn("[bold blue]{task.description}"),
+        BarColumn(),
+        MofNCompleteColumn(),
+        FPSColumn(),
+        ObjectsColumn(),
+        TimeElapsedColumn(),
+        TimeRemainingColumn(),
+        console=console,
+        disable=quiet,
+    )
+
+    with progress:
+        task = progress.add_task("Processing", total=frames_to_process)
+
+        for result in tracker.propagate(max_frames=max_frames):
+            if _interrupted:
+                break
+
+            # Update outputs
+            if bbox_writer:
+                bbox_writer.add_result(result)
+            if seg_writer:
+                seg_writer.add_result(result)
+
+            frames_processed += 1
+            total_objects = max(total_objects, result.num_objects)
+
+            progress.update(task, advance=1, objects=result.num_objects)
+
+    # Save outputs
+    _save_outputs(
+        bbox_writer=bbox_writer,
+        seg_writer=seg_writer,
+        frames_processed=frames_processed,
+        frames_to_process=frames_to_process,
+        total_objects=total_objects,
+        quiet=quiet,
+    )
+
+
+def _save_outputs(
+    bbox_writer,
+    seg_writer,
+    frames_processed: int,
+    frames_to_process: int,
+    total_objects: int,
+    quiet: bool,
+) -> None:
+    """Save tracking outputs and print summary."""
+    global _interrupted
+
+    if not quiet:
+        console.print()
+
+    if bbox_writer:
+        bbox_writer.save()
+        if not quiet:
+            console.print(
+                f"[green]Saved bounding boxes:[/green] {bbox_writer.output_path}"
+            )
+
+    if seg_writer:
+        seg_writer.finalize()
+        if not quiet:
+            console.print(
+                f"[green]Saved segmentation masks:[/green] {seg_writer.output_path}"
+            )
+
+    # Summary
+    if not quiet:
+        console.print()
+        if _interrupted:
+            console.print(
+                f"[yellow]Processed {frames_processed}/{frames_to_process} frames "
+                f"(interrupted)[/yellow]"
+            )
+        else:
+            console.print(
+                f"[green]Processed {frames_processed} frames, "
+                f"{total_objects} objects tracked[/green]"
+            )
 
 
 @app.command()

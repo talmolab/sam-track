@@ -73,7 +73,7 @@ class SLPWriter:
     def add_frame_assignments(
         self,
         frame_idx: int,
-        assignments: list["TrackAssignment"],
+        assignments: list[TrackAssignment],
         original_instances: list[sio.Instance],
     ) -> None:
         """Add assignments for a frame.
@@ -99,21 +99,24 @@ class SLPWriter:
         return self._tracks[name]
 
     def _copy_instance_with_track(
-        self, inst: sio.Instance, track: sio.Track | None, tracking_score: float | None = None
+        self,
+        inst: sio.Instance,
+        track: sio.Track | None,
+        tracking_score: float | None = None,
     ) -> sio.Instance:
         """Copy an instance with a new track, preserving the original type.
 
         Args:
             inst: Original instance (Instance or PredictedInstance).
             track: Track to assign to the new instance.
-            tracking_score: Optional tracking score to assign (e.g., from SAM3 matching).
-                If None, preserves the original tracking_score.
+            tracking_score: Optional tracking score to assign (e.g., from
+                SAM3 matching). If None, preserves the original tracking_score.
 
         Returns:
             A new instance of the same type with the new track.
         """
         score = tracking_score if tracking_score is not None else inst.tracking_score
-        if type(inst) == sio.PredictedInstance:
+        if type(inst) is sio.PredictedInstance:
             return sio.PredictedInstance(
                 points=inst.points.copy(),
                 skeleton=self._skeleton,
@@ -162,9 +165,8 @@ class SLPWriter:
                         # Use SAM3 ID as track name for untracked poses
                         track = self._get_or_create_track(f"track_{sam3_id}")
 
-                    # Create new instance with track assignment
-                    # Preserve the original instance type (Instance vs PredictedInstance)
-                    # Use pose-mask matching confidence as tracking_score
+                    # Create new instance with track assignment, preserving
+                    # the original instance type and using matching confidence
                     new_inst = self._copy_instance_with_track(
                         inst, track, tracking_score=confidence
                     )
@@ -203,7 +205,7 @@ class SLPWriter:
         """Alias for finalize() for context manager compatibility."""
         self.finalize()
 
-    def __enter__(self) -> "SLPWriter":
+    def __enter__(self) -> SLPWriter:
         """Context manager entry."""
         return self
 

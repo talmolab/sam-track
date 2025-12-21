@@ -1,11 +1,17 @@
 """Tests for sam-track CLI."""
 
+import re
 from pathlib import Path
 
-import pytest
 from typer.testing import CliRunner
 
 from sam_track.cli import app
+
+
+def strip_ansi(text: str) -> str:
+    """Remove ANSI escape codes from text."""
+    ansi_pattern = re.compile(r"\x1b\[[0-9;]*m")
+    return ansi_pattern.sub("", text)
 
 
 runner = CliRunner()
@@ -32,8 +38,9 @@ class TestTrackValidation:
 
     def test_video_not_found(self, tmp_path: Path):
         """Test error when video file doesn't exist."""
+        video_path = str(tmp_path / "nonexistent.mp4")
         result = runner.invoke(
-            app, ["track", str(tmp_path / "nonexistent.mp4"), "--text", "mouse", "--bbox"]
+            app, ["track", video_path, "--text", "mouse", "--bbox"]
         )
         assert result.exit_code == 1
         assert "Video file not found" in result.stdout
@@ -113,10 +120,11 @@ class TestTrackValidation:
         """Test error when pose file doesn't exist."""
         video = tmp_path / "test.mp4"
         video.touch()
+        pose_path = str(tmp_path / "nonexistent.slp")
 
         result = runner.invoke(
             app,
-            ["track", str(video), "--pose", str(tmp_path / "nonexistent.slp"), "--bbox"],
+            ["track", str(video), "--pose", pose_path, "--bbox"],
         )
         assert result.exit_code == 1
         assert "Pose file not found" in result.stdout
@@ -133,14 +141,16 @@ class TestTrackOutputPaths:
         # We can't run the full tracking without a real video,
         # but we can check the help to confirm the option exists
         result = runner.invoke(app, ["track", "--help"])
-        assert "--bbox" in result.stdout
-        assert "--bbox-output" in result.stdout
+        output = strip_ansi(result.stdout)
+        assert "--bbox" in output
+        assert "--bbox-output" in output
 
     def test_default_seg_path(self, tmp_path: Path):
         """Test default seg output path is derived from video name."""
         result = runner.invoke(app, ["track", "--help"])
-        assert "--seg" in result.stdout
-        assert "--seg-output" in result.stdout
+        output = strip_ansi(result.stdout)
+        assert "--seg" in output
+        assert "--seg-output" in output
 
 
 class TestTrackOptions:
@@ -149,18 +159,21 @@ class TestTrackOptions:
     def test_device_option(self):
         """Test --device option is available."""
         result = runner.invoke(app, ["track", "--help"])
-        assert "--device" in result.stdout
-        assert "cuda" in result.stdout
+        output = strip_ansi(result.stdout)
+        assert "--device" in output
+        assert "cuda" in output
 
     def test_max_frames_option(self):
         """Test --max-frames option is available."""
         result = runner.invoke(app, ["track", "--help"])
-        assert "--max-frames" in result.stdout
+        output = strip_ansi(result.stdout)
+        assert "--max-frames" in output
 
     def test_quiet_option(self):
         """Test --quiet option is available."""
         result = runner.invoke(app, ["track", "--help"])
-        assert "--quiet" in result.stdout
+        output = strip_ansi(result.stdout)
+        assert "--quiet" in output
 
 
 class TestAuthCommand:
@@ -170,14 +183,16 @@ class TestAuthCommand:
         """Test auth command help."""
         result = runner.invoke(app, ["auth", "--help"])
         assert result.exit_code == 0
-        assert "HuggingFace" in result.stdout
-        assert "--token" in result.stdout
+        output = strip_ansi(result.stdout)
+        assert "HuggingFace" in output
+        assert "--token" in output
 
     def test_auth_shows_status(self):
         """Test auth command shows authentication status."""
         result = runner.invoke(app, ["auth"])
         # Should show some kind of status, even if not authenticated
-        assert "Authenticated" in result.stdout or "authentication" in result.stdout.lower()
+        output = result.stdout.lower()
+        assert "authenticated" in output or "authentication" in output
 
 
 class TestSystemCommand:
@@ -205,19 +220,21 @@ class TestHelpText:
         """Test main help is informative."""
         result = runner.invoke(app, ["--help"])
         assert result.exit_code == 0
-        assert "sam-track" in result.stdout
-        assert "SAM3" in result.stdout
+        output = strip_ansi(result.stdout)
+        assert "sam-track" in output
+        assert "SAM3" in output
 
     def test_track_help_examples(self):
         """Test track command includes usage examples."""
         result = runner.invoke(app, ["track", "--help"])
         assert result.exit_code == 0
-        assert "Examples" in result.stdout
-        assert "--text" in result.stdout
-        assert "--roi" in result.stdout
-        assert "--pose" in result.stdout
-        assert "--bbox" in result.stdout
-        assert "--seg" in result.stdout
+        output = strip_ansi(result.stdout)
+        assert "Examples" in output
+        assert "--text" in output
+        assert "--roi" in output
+        assert "--pose" in output
+        assert "--bbox" in output
+        assert "--seg" in output
 
 
 class TestShortOptions:
@@ -226,14 +243,15 @@ class TestShortOptions:
     def test_short_options_available(self):
         """Test that short options are available."""
         result = runner.invoke(app, ["track", "--help"])
+        output = strip_ansi(result.stdout)
         # Check short options are documented
-        assert "-t" in result.stdout  # --text
-        assert "-r" in result.stdout  # --roi
-        assert "-p" in result.stdout  # --pose
-        assert "-b" in result.stdout  # --bbox
-        assert "-s" in result.stdout  # --seg
-        assert "-B" in result.stdout  # --bbox-output
-        assert "-S" in result.stdout  # --seg-output
-        assert "-d" in result.stdout  # --device
-        assert "-n" in result.stdout  # --max-frames
-        assert "-q" in result.stdout  # --quiet
+        assert "-t" in output  # --text
+        assert "-r" in output  # --roi
+        assert "-p" in output  # --pose
+        assert "-b" in output  # --bbox
+        assert "-s" in output  # --seg
+        assert "-B" in output  # --bbox-output
+        assert "-S" in output  # --seg-output
+        assert "-d" in output  # --device
+        assert "-n" in output  # --max-frames
+        assert "-q" in output  # --quiet

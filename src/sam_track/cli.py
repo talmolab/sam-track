@@ -258,9 +258,7 @@ def track(
     provided_prompts = [(name, val) for name, val in prompts if val is not None]
 
     if len(provided_prompts) == 0:
-        console.print(
-            "[red]Error: Must specify one of --text, --roi, or --pose[/red]"
-        )
+        console.print("[red]Error: Must specify one of --text, --roi, or --pose[/red]")
         raise typer.Exit(1)
 
     if len(provided_prompts) > 1:
@@ -294,9 +292,7 @@ def track(
 
     # === Setup ===
     if not quiet:
-        _print_config(
-            video, text, roi, pose, bbox_path, seg_path, device, max_frames
-        )
+        _print_config(video, text, roi, pose, bbox_path, seg_path, device, max_frames)
 
     # Register signal handler for graceful shutdown
     original_handler = signal.signal(signal.SIGINT, _signal_handler)

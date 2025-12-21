@@ -39,9 +39,7 @@ class TestTrackValidation:
     def test_video_not_found(self, tmp_path: Path):
         """Test error when video file doesn't exist."""
         video_path = str(tmp_path / "nonexistent.mp4")
-        result = runner.invoke(
-            app, ["track", video_path, "--text", "mouse", "--bbox"]
-        )
+        result = runner.invoke(app, ["track", video_path, "--text", "mouse", "--bbox"])
         assert result.exit_code == 1
         assert "Video file not found" in result.stdout
 

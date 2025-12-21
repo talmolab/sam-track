@@ -355,9 +355,7 @@ def require_min_keypoints_inside(min_count: int = 3) -> MatchPredicate:
         A MatchPredicate function.
     """
 
-    def predicate(
-        pose: "sio.Instance", mask: np.ndarray, ctx: MatchContext
-    ) -> bool:
+    def predicate(pose: "sio.Instance", mask: np.ndarray, ctx: MatchContext) -> bool:
         return ctx.keypoints_inside >= min_count
 
     return predicate
@@ -373,9 +371,7 @@ def require_min_fraction_inside(min_frac: float = 0.5) -> MatchPredicate:
         A MatchPredicate function.
     """
 
-    def predicate(
-        pose: "sio.Instance", mask: np.ndarray, ctx: MatchContext
-    ) -> bool:
+    def predicate(pose: "sio.Instance", mask: np.ndarray, ctx: MatchContext) -> bool:
         if ctx.keypoints_visible == 0:
             return False
         return ctx.keypoints_inside / ctx.keypoints_visible >= min_frac
@@ -393,9 +389,7 @@ def require_centroid_proximity(max_dist: float = 100.0) -> MatchPredicate:
         A MatchPredicate function.
     """
 
-    def predicate(
-        pose: "sio.Instance", mask: np.ndarray, ctx: MatchContext
-    ) -> bool:
+    def predicate(pose: "sio.Instance", mask: np.ndarray, ctx: MatchContext) -> bool:
         coords = pose.numpy()
         pose_centroid = np.nanmean(coords, axis=0)
         if np.any(np.isnan(pose_centroid)):
@@ -419,9 +413,7 @@ def require_reasonable_mask_area(
         A MatchPredicate function.
     """
 
-    def predicate(
-        pose: "sio.Instance", mask: np.ndarray, ctx: MatchContext
-    ) -> bool:
+    def predicate(pose: "sio.Instance", mask: np.ndarray, ctx: MatchContext) -> bool:
         return min_area <= ctx.mask_area <= max_area
 
     return predicate

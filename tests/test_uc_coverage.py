@@ -27,10 +27,22 @@ DATA_DIR = Path(__file__).parent / "data"
 # Fixture paths
 UC1_3NODE = DATA_DIR / "labels.3node.first_frame.slp"
 UC1_15NODE = DATA_DIR / "labels.15node.first_frame.slp"
-UC3_FIXTURE = DATA_DIR / "labels.15node.v004.gt_frames=10.gt_tracks=False.pr_frames=0.pr_tracks=False.slp"
-UC4_FIXTURE = DATA_DIR / "labels.15node.v004.gt_frames=10.gt_tracks=True.pr_frames=0.pr_tracks=False.slp"
-UC5_FIXTURE = DATA_DIR / "labels.15node.v004.gt_frames=0.gt_tracks=False.pr_frames=full.pr_tracks=False.slp"
-UC7_FIXTURE = DATA_DIR / "labels.15node.v004.gt_frames=10.gt_tracks=True.pr_frames=full.pr_tracks=False.slp"
+UC3_FIXTURE = (
+    DATA_DIR
+    / "labels.15node.v004.gt_frames=10.gt_tracks=False.pr_frames=0.pr_tracks=False.slp"
+)
+UC4_FIXTURE = (
+    DATA_DIR
+    / "labels.15node.v004.gt_frames=10.gt_tracks=True.pr_frames=0.pr_tracks=False.slp"
+)
+UC5_FIXTURE = (
+    DATA_DIR
+    / "labels.15node.v004.gt_frames=0.gt_tracks=False.pr_frames=full.pr_tracks=False.slp"  # noqa: E501
+)
+UC7_FIXTURE = (
+    DATA_DIR
+    / "labels.15node.v004.gt_frames=10.gt_tracks=True.pr_frames=full.pr_tracks=False.slp"  # noqa: E501
+)
 
 
 class TestUC1SingleFrameSeed:
@@ -73,7 +85,9 @@ class TestUC1SingleFrameSeed:
         for i, obj_id in enumerate(prompt.obj_ids):
             points = prompt.points[i]
             # At least 2 visible, at most 3
-            assert 2 <= len(points) <= 3, f"Expected 2-3 points for 3-node skeleton, got {len(points)}"
+            assert 2 <= len(points) <= 3, (
+                f"Expected 2-3 points for 3-node skeleton, got {len(points)}"
+            )
 
     def test_15node_visible_keypoints_become_prompts(self):
         """UC1-15node: All visible keypoints become point prompts."""
@@ -136,9 +150,7 @@ class TestUC2SingleFrameWithTracks:
         # Verify each object has a named track (not instance_N)
         for obj_id in prompt.obj_ids:
             name = prompt.obj_names[obj_id]
-            assert not name.startswith("instance_"), (
-                f"Expected named track, got {name}"
-            )
+            assert not name.startswith("instance_"), f"Expected named track, got {name}"
 
 
 class TestUC3MultiFrameSparseGTNoTracks:
@@ -200,7 +212,8 @@ class TestUC3MultiFrameSparseGTNoTracks:
                 f"Frame {frame_idx}: expected 2 objects, got {prompt.num_objects}"
             )
             assert prompt.frame_idx == frame_idx, (
-                f"Prompt frame_idx mismatch: expected {frame_idx}, got {prompt.frame_idx}"
+                f"Prompt frame_idx mismatch: expected {frame_idx}, "
+                f"got {prompt.frame_idx}"
             )
 
     def test_untracked_instances_use_index_ids(self):
@@ -307,7 +320,7 @@ class TestUC4MultiFrameSparseGTWithTracks:
             object_ids=np.array([1, 0]),  # Swapped!
         )
 
-        swaps = reconciler.detect_swaps()
+        reconciler.detect_swaps()
         # Should detect swap(s) since assignments changed
         # (Result depends on actual pose positions matching masks)
 
@@ -451,7 +464,7 @@ class TestUC7MixedGTPredictions:
         the GT precedence logic using a synthetic scenario.
         """
         handler = PosePromptHandler(UC7_FIXTURE)
-        labels = sio.load_slp(str(UC7_FIXTURE), open_videos=False)
+        sio.load_slp(str(UC7_FIXTURE), open_videos=False)
 
         # Verify GT frames use GT instances (with named tracks)
         gt_frame_indices = {0, 225, 379, 512, 681, 682, 859, 1060, 1244, 1350}
@@ -541,8 +554,8 @@ class TestReconciliationIntegration:
                     cx, cy = valid_coords.mean(axis=0).astype(int)
                     mask = np.zeros((H, W), dtype=bool)
                     # Create 50x50 mask around centroid
-                    y0, y1 = max(0, cy-25), min(H, cy+25)
-                    x0, x1 = max(0, cx-25), min(W, cx+25)
+                    y0, y1 = max(0, cy - 25), min(H, cy + 25)
+                    x0, x1 = max(0, cx - 25), min(W, cx + 25)
                     mask[y0:y1, x0:x1] = True
                     masks.append(mask)
 

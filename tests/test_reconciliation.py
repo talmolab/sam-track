@@ -143,10 +143,18 @@ class TestIDReconciler:
         # Add consistent assignments
         reconciler._assignments = [
             TrackAssignment(
-                frame_idx=0, pose_track_name="mouse1", pose_idx=0, sam3_obj_id=0, confidence=1.0
+                frame_idx=0,
+                pose_track_name="mouse1",
+                pose_idx=0,
+                sam3_obj_id=0,
+                confidence=1.0,
             ),
             TrackAssignment(
-                frame_idx=10, pose_track_name="mouse1", pose_idx=0, sam3_obj_id=0, confidence=1.0
+                frame_idx=10,
+                pose_track_name="mouse1",
+                pose_idx=0,
+                sam3_obj_id=0,
+                confidence=1.0,
             ),
         ]
 
@@ -160,10 +168,18 @@ class TestIDReconciler:
         # mouse1 is assigned to obj 0 at frame 0, but obj 1 at frame 10
         reconciler._assignments = [
             TrackAssignment(
-                frame_idx=0, pose_track_name="mouse1", pose_idx=0, sam3_obj_id=0, confidence=1.0
+                frame_idx=0,
+                pose_track_name="mouse1",
+                pose_idx=0,
+                sam3_obj_id=0,
+                confidence=1.0,
             ),
             TrackAssignment(
-                frame_idx=10, pose_track_name="mouse1", pose_idx=0, sam3_obj_id=1, confidence=1.0
+                frame_idx=10,
+                pose_track_name="mouse1",
+                pose_idx=0,
+                sam3_obj_id=1,
+                confidence=1.0,
             ),
         ]
 
@@ -179,13 +195,25 @@ class TestIDReconciler:
 
         reconciler._assignments = [
             TrackAssignment(
-                frame_idx=0, pose_track_name="mouse1", pose_idx=0, sam3_obj_id=0, confidence=1.0
+                frame_idx=0,
+                pose_track_name="mouse1",
+                pose_idx=0,
+                sam3_obj_id=0,
+                confidence=1.0,
             ),
             TrackAssignment(
-                frame_idx=0, pose_track_name="mouse2", pose_idx=1, sam3_obj_id=1, confidence=1.0
+                frame_idx=0,
+                pose_track_name="mouse2",
+                pose_idx=1,
+                sam3_obj_id=1,
+                confidence=1.0,
             ),
             TrackAssignment(
-                frame_idx=10, pose_track_name="mouse1", pose_idx=0, sam3_obj_id=0, confidence=1.0
+                frame_idx=10,
+                pose_track_name="mouse1",
+                pose_idx=0,
+                sam3_obj_id=0,
+                confidence=1.0,
             ),
         ]
 
@@ -254,12 +282,22 @@ class TestMatchPredicates:
         predicate = require_min_keypoints_inside(min_count=3)
 
         ctx_pass = MatchContext(
-            frame_idx=0, sam3_obj_id=0, cost=0, keypoints_inside=3,
-            keypoints_visible=5, mask_area=1000, mask_centroid=(0, 0),
+            frame_idx=0,
+            sam3_obj_id=0,
+            cost=0,
+            keypoints_inside=3,
+            keypoints_visible=5,
+            mask_area=1000,
+            mask_centroid=(0, 0),
         )
         ctx_fail = MatchContext(
-            frame_idx=0, sam3_obj_id=0, cost=0, keypoints_inside=2,
-            keypoints_visible=5, mask_area=1000, mask_centroid=(0, 0),
+            frame_idx=0,
+            sam3_obj_id=0,
+            cost=0,
+            keypoints_inside=2,
+            keypoints_visible=5,
+            mask_area=1000,
+            mask_centroid=(0, 0),
         )
 
         assert predicate(None, None, ctx_pass)
@@ -270,12 +308,22 @@ class TestMatchPredicates:
         predicate = require_min_fraction_inside(min_frac=0.5)
 
         ctx_pass = MatchContext(
-            frame_idx=0, sam3_obj_id=0, cost=0, keypoints_inside=3,
-            keypoints_visible=5, mask_area=1000, mask_centroid=(0, 0),
+            frame_idx=0,
+            sam3_obj_id=0,
+            cost=0,
+            keypoints_inside=3,
+            keypoints_visible=5,
+            mask_area=1000,
+            mask_centroid=(0, 0),
         )  # 3/5 = 0.6 >= 0.5
         ctx_fail = MatchContext(
-            frame_idx=0, sam3_obj_id=0, cost=0, keypoints_inside=1,
-            keypoints_visible=5, mask_area=1000, mask_centroid=(0, 0),
+            frame_idx=0,
+            sam3_obj_id=0,
+            cost=0,
+            keypoints_inside=1,
+            keypoints_visible=5,
+            mask_area=1000,
+            mask_centroid=(0, 0),
         )  # 1/5 = 0.2 < 0.5
 
         assert predicate(None, None, ctx_pass)
@@ -286,16 +334,31 @@ class TestMatchPredicates:
         predicate = require_reasonable_mask_area(min_area=100, max_area=10000)
 
         ctx_pass = MatchContext(
-            frame_idx=0, sam3_obj_id=0, cost=0, keypoints_inside=3,
-            keypoints_visible=5, mask_area=5000, mask_centroid=(0, 0),
+            frame_idx=0,
+            sam3_obj_id=0,
+            cost=0,
+            keypoints_inside=3,
+            keypoints_visible=5,
+            mask_area=5000,
+            mask_centroid=(0, 0),
         )
         ctx_too_small = MatchContext(
-            frame_idx=0, sam3_obj_id=0, cost=0, keypoints_inside=3,
-            keypoints_visible=5, mask_area=50, mask_centroid=(0, 0),
+            frame_idx=0,
+            sam3_obj_id=0,
+            cost=0,
+            keypoints_inside=3,
+            keypoints_visible=5,
+            mask_area=50,
+            mask_centroid=(0, 0),
         )
         ctx_too_large = MatchContext(
-            frame_idx=0, sam3_obj_id=0, cost=0, keypoints_inside=3,
-            keypoints_visible=5, mask_area=50000, mask_centroid=(0, 0),
+            frame_idx=0,
+            sam3_obj_id=0,
+            cost=0,
+            keypoints_inside=3,
+            keypoints_visible=5,
+            mask_area=50000,
+            mask_centroid=(0, 0),
         )
 
         assert predicate(None, None, ctx_pass)

@@ -370,8 +370,16 @@ def track(
     # === Setup ===
     if not quiet:
         _print_config(
-            video, text, roi, pose, bbox_path, seg_path, slp_path,
-            device, max_frames, preload,
+            video,
+            text,
+            roi,
+            pose,
+            bbox_path,
+            seg_path,
+            slp_path,
+            device,
+            max_frames,
+            preload,
         )
 
     # Register signal handler for graceful shutdown
@@ -536,9 +544,7 @@ def _run_tracking(
     tracker = SAM3Tracker(device=device)
 
     # Check for multi-frame pose mode
-    is_multi_frame_pose = (
-        pose is not None and prompt_handler.num_labeled_frames > 1
-    )
+    is_multi_frame_pose = pose is not None and prompt_handler.num_labeled_frames > 1
 
     if is_multi_frame_pose and not quiet:
         console.print(
@@ -753,9 +759,7 @@ def _run_tracking_streaming(
                 if lf is not None:
                     import sleap_io as sio
 
-                    gt_instances = [
-                        i for i in lf.instances if type(i) is sio.Instance
-                    ]
+                    gt_instances = [i for i in lf.instances if type(i) is sio.Instance]
                     pred_instances = [
                         i for i in lf.instances if type(i) is sio.PredictedInstance
                     ]
@@ -923,9 +927,7 @@ def _run_tracking_preload(
                 if lf is not None:
                     import sleap_io as sio
 
-                    gt_instances = [
-                        i for i in lf.instances if type(i) is sio.Instance
-                    ]
+                    gt_instances = [i for i in lf.instances if type(i) is sio.Instance]
                     pred_instances = [
                         i for i in lf.instances if type(i) is sio.PredictedInstance
                     ]

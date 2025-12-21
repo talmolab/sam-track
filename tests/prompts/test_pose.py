@@ -10,10 +10,22 @@ from sam_track.prompts import PosePromptHandler, Prompt, PromptType
 DATA_DIR = Path(__file__).parent.parent / "data"
 SLP_3NODE = DATA_DIR / "labels.3node.first_frame.slp"
 SLP_15NODE = DATA_DIR / "labels.15node.first_frame.slp"
-SLP_MULTI_FRAME = DATA_DIR / "labels.15node.v004.gt_frames=10.gt_tracks=False.pr_frames=0.pr_tracks=False.slp"
-SLP_WITH_TRACKS = DATA_DIR / "labels.15node.v004.gt_frames=10.gt_tracks=True.pr_frames=0.pr_tracks=False.slp"
-SLP_WITH_PREDICTIONS = DATA_DIR / "labels.15node.v004.gt_frames=0.gt_tracks=False.pr_frames=full.pr_tracks=False.slp"
-SLP_MIXED = DATA_DIR / "labels.15node.v004.gt_frames=10.gt_tracks=True.pr_frames=full.pr_tracks=False.slp"
+SLP_MULTI_FRAME = (
+    DATA_DIR
+    / "labels.15node.v004.gt_frames=10.gt_tracks=False.pr_frames=0.pr_tracks=False.slp"
+)
+SLP_WITH_TRACKS = (
+    DATA_DIR
+    / "labels.15node.v004.gt_frames=10.gt_tracks=True.pr_frames=0.pr_tracks=False.slp"
+)
+SLP_WITH_PREDICTIONS = (
+    DATA_DIR
+    / "labels.15node.v004.gt_frames=0.gt_tracks=False.pr_frames=full.pr_tracks=False.slp"  # noqa: E501
+)
+SLP_MIXED = (
+    DATA_DIR
+    / "labels.15node.v004.gt_frames=10.gt_tracks=True.pr_frames=full.pr_tracks=False.slp"  # noqa: E501
+)
 
 
 class TestPosePromptHandler:

@@ -214,7 +214,9 @@ class TestSLPWriter:
         track_names = {t.name for t in result.tracks}
         assert "track_42" in track_names
 
-    def test_creates_parent_directory(self, source_labels, sample_assignments, tmp_path):
+    def test_creates_parent_directory(
+        self, source_labels, sample_assignments, tmp_path
+    ):
         """Test that parent directory is created if needed."""
         output_path = tmp_path / "nested" / "dir" / "output.slp"
         writer = SLPWriter(

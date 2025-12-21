@@ -1,13 +1,30 @@
 """sam-track CLI using Typer."""
 
+from __future__ import annotations
+
 import platform
 import shutil
+import signal
 import subprocess
 import sys
+from pathlib import Path
+from typing import Annotated
 
 import typer
 from rich.console import Console
+from rich.panel import Panel
+from rich.progress import (
+    BarColumn,
+    MofNCompleteColumn,
+    Progress,
+    ProgressColumn,
+    Task,
+    TextColumn,
+    TimeElapsedColumn,
+    TimeRemainingColumn,
+)
 from rich.table import Table
+from rich.text import Text
 
 from . import __version__
 
@@ -22,6 +39,35 @@ app = typer.Typer(
     add_completion=False,
 )
 console = Console()
+
+# Global interrupt flag for graceful shutdown
+_interrupted = False
+
+
+def _signal_handler(sig, frame):
+    """Handle interrupt signal for graceful shutdown."""
+    global _interrupted
+    _interrupted = True
+    console.print("\n[yellow]Interrupt received, finishing current frame...[/yellow]")
+
+
+class FPSColumn(ProgressColumn):
+    """Display processing speed in frames per second."""
+
+    max_refresh = 0.5
+
+    def render(self, task: Task) -> Text:
+        if task.speed is not None:
+            return Text(f"{task.speed:.1f} fps", style="green")
+        return Text("-- fps", style="dim")
+
+
+class ObjectsColumn(ProgressColumn):
+    """Display number of objects being tracked."""
+
+    def render(self, task: Task) -> Text:
+        count = task.fields.get("objects", 0)
+        return Text(f"{count} obj", style="cyan")
 
 
 def parse_driver_version(version: str) -> tuple[int, ...]:
@@ -96,11 +142,453 @@ def main(
 
 @app.command()
 def track(
-    video: str = typer.Argument(..., help="Path to input video file."),
+    video: Annotated[Path, typer.Argument(help="Path to input video file.")],
+    # Prompt options (mutually exclusive)
+    text: Annotated[
+        str | None,
+        typer.Option(
+            "--text",
+            "-t",
+            help='Text prompt for object detection (e.g., "mouse", "person").',
+        ),
+    ] = None,
+    roi: Annotated[
+        Path | None,
+        typer.Option(
+            "--roi",
+            "-r",
+            help="ROI YAML file from labelroi with polygon annotations.",
+        ),
+    ] = None,
+    pose: Annotated[
+        Path | None,
+        typer.Option(
+            "--pose",
+            "-p",
+            help="SLEAP SLP file with pose annotations for point prompts.",
+        ),
+    ] = None,
+    # Output options
+    bbox: Annotated[
+        bool,
+        typer.Option(
+            "--bbox",
+            "-b",
+            help="Enable bounding box output (default: <video>.bbox.json).",
+        ),
+    ] = False,
+    bbox_output: Annotated[
+        Path | None,
+        typer.Option(
+            "--bbox-output",
+            "-B",
+            help="Custom path for bounding box output (implies --bbox).",
+        ),
+    ] = None,
+    seg: Annotated[
+        bool,
+        typer.Option(
+            "--seg",
+            "-s",
+            help="Enable segmentation mask output (default: <video>.seg.h5).",
+        ),
+    ] = False,
+    seg_output: Annotated[
+        Path | None,
+        typer.Option(
+            "--seg-output",
+            "-S",
+            help="Custom path for segmentation output (implies --seg).",
+        ),
+    ] = None,
+    # Advanced options
+    device: Annotated[
+        str | None,
+        typer.Option(
+            "--device",
+            "-d",
+            help="Device for inference (e.g., cuda, cuda:0, mps, cpu).",
+        ),
+    ] = None,
+    max_frames: Annotated[
+        int | None,
+        typer.Option(
+            "--max-frames",
+            "-n",
+            help="Maximum number of frames to process.",
+        ),
+    ] = None,
+    quiet: Annotated[
+        bool,
+        typer.Option(
+            "--quiet",
+            "-q",
+            help="Suppress progress output.",
+        ),
+    ] = False,
 ) -> None:
-    """Track objects in a video using SAM3."""
-    console.print("[yellow]sam-track is not yet implemented.[/yellow]")
-    console.print(f"Would track: {video}")
+    """Track objects in a video using SAM3.
+
+    Requires exactly one prompt type (--text, --roi, or --pose) and at least
+    one output format (--bbox or --seg).
+
+    Examples:
+
+        # Track with text prompt, output bounding boxes
+        uv run sam-track video.mp4 --text "mouse" --bbox
+
+        # Track with ROI file, output both formats
+        uv run sam-track video.mp4 --roi rois.yml --bbox --seg
+
+        # Track with pose file, custom output path
+        uv run sam-track video.mp4 --pose labels.slp --bbox results.json
+    """
+    global _interrupted
+    _interrupted = False
+
+    # === Validation ===
+
+    # Check video exists
+    if not video.exists():
+        console.print(f"[red]Error: Video file not found: {video}[/red]")
+        raise typer.Exit(1)
+
+    # Validate mutual exclusivity of prompt options
+    prompts = [("--text", text), ("--roi", roi), ("--pose", pose)]
+    provided_prompts = [(name, val) for name, val in prompts if val is not None]
+
+    if len(provided_prompts) == 0:
+        console.print("[red]Error: Must specify one of --text, --roi, or --pose[/red]")
+        raise typer.Exit(1)
+
+    if len(provided_prompts) > 1:
+        names = ", ".join(name for name, _ in provided_prompts)
+        console.print(
+            f"[red]Error: Only one prompt type allowed, but got: {names}[/red]"
+        )
+        raise typer.Exit(1)
+
+    # Validate at least one output format
+    has_bbox = bbox or bbox_output is not None
+    has_seg = seg or seg_output is not None
+
+    if not has_bbox and not has_seg:
+        console.print("[red]Error: Must specify at least one of --bbox or --seg[/red]")
+        raise typer.Exit(1)
+
+    # Validate ROI file exists
+    if roi is not None and not roi.exists():
+        console.print(f"[red]Error: ROI file not found: {roi}[/red]")
+        raise typer.Exit(1)
+
+    # Validate pose file exists
+    if pose is not None and not pose.exists():
+        console.print(f"[red]Error: Pose file not found: {pose}[/red]")
+        raise typer.Exit(1)
+
+    # Resolve output paths
+    bbox_path = bbox_output or (video.with_suffix(".bbox.json") if has_bbox else None)
+    seg_path = seg_output or (video.with_suffix(".seg.h5") if has_seg else None)
+
+    # === Setup ===
+    if not quiet:
+        _print_config(video, text, roi, pose, bbox_path, seg_path, device, max_frames)
+
+    # Register signal handler for graceful shutdown
+    original_handler = signal.signal(signal.SIGINT, _signal_handler)
+
+    try:
+        _run_tracking(
+            video=video,
+            text=text,
+            roi=roi,
+            pose=pose,
+            bbox_path=bbox_path,
+            seg_path=seg_path,
+            device=device,
+            max_frames=max_frames,
+            quiet=quiet,
+        )
+    except KeyboardInterrupt:
+        # Already handled by signal handler
+        pass
+    finally:
+        # Restore original signal handler
+        signal.signal(signal.SIGINT, original_handler)
+
+    if _interrupted:
+        console.print("[yellow]Processing interrupted.[/yellow]")
+        raise typer.Exit(130)  # Standard exit code for SIGINT
+
+
+def _print_config(
+    video: Path,
+    text: str | None,
+    roi: Path | None,
+    pose: Path | None,
+    bbox_path: Path | None,
+    seg_path: Path | None,
+    device: str | None,
+    max_frames: int | None,
+) -> None:
+    """Print configuration summary."""
+    table = Table.grid(padding=(0, 2))
+    table.add_column(style="cyan", justify="right")
+    table.add_column(style="white")
+
+    table.add_row("Video:", str(video))
+
+    if text:
+        table.add_row("Prompt:", f'text: "{text}"')
+    elif roi:
+        table.add_row("Prompt:", f"roi: {roi}")
+    elif pose:
+        table.add_row("Prompt:", f"pose: {pose}")
+
+    if bbox_path:
+        table.add_row("BBox output:", str(bbox_path))
+    if seg_path:
+        table.add_row("Seg output:", str(seg_path))
+
+    if device:
+        table.add_row("Device:", device)
+    if max_frames:
+        table.add_row("Max frames:", str(max_frames))
+
+    console.print()
+    console.print(Panel(table, title="[bold]sam-track[/bold]", border_style="blue"))
+    console.print()
+
+
+def _run_tracking(
+    video: Path,
+    text: str | None,
+    roi: Path | None,
+    pose: Path | None,
+    bbox_path: Path | None,
+    seg_path: Path | None,
+    device: str | None,
+    max_frames: int | None,
+    quiet: bool,
+) -> None:
+    """Run the tracking pipeline."""
+    global _interrupted
+
+    import numpy as np
+    from sleap_io import Video
+
+    from .outputs import BBoxWriter, SegmentationWriter
+    from .prompts import (
+        PosePromptHandler,
+        PromptType,
+        ROIPromptHandler,
+        TextPromptHandler,
+    )
+    from .tracker import SAM3Tracker
+
+    # Load video
+    if not quiet:
+        console.print("Loading video...")
+    vid = Video.from_filename(str(video))
+    num_frames = len(vid)
+    video_height, video_width = vid.shape[1], vid.shape[2]
+
+    if not quiet:
+        console.print(f"  {video_width}x{video_height}, {num_frames} frames")
+
+    # Determine prompt type and load prompt
+    if not quiet:
+        console.print("Loading prompt...")
+
+    if text:
+        prompt_handler = TextPromptHandler(text)
+        prompt = prompt_handler.load()
+        use_text = True
+        prompt_type_str = "text"
+        prompt_value_str = text
+    elif roi:
+        prompt_handler = ROIPromptHandler(roi, image_size=(video_height, video_width))
+        prompt = prompt_handler.load()
+        use_text = False
+        prompt_type_str = "roi"
+        prompt_value_str = str(roi)
+    else:  # pose
+        prompt_handler = PosePromptHandler(pose)
+        prompt = prompt_handler.load()
+        use_text = False
+        prompt_type_str = "pose"
+        prompt_value_str = str(pose)
+
+    if not quiet:
+        if prompt.prompt_type == PromptType.TEXT:
+            console.print(f'  Text: "{prompt.text}"')
+        else:
+            console.print(f"  Objects: {prompt.num_objects}")
+            for obj_id in prompt.obj_ids:
+                console.print(f"    - {prompt.get_name(obj_id)} (id={obj_id})")
+
+    # Limit frames if requested
+    frames_to_process = min(num_frames, max_frames) if max_frames else num_frames
+
+    # Initialize tracker
+    if not quiet:
+        console.print("Loading SAM3 model...")
+    tracker = SAM3Tracker(device=device)
+
+    # Initialize output writers
+    bbox_writer = None
+    seg_writer = None
+
+    if bbox_path:
+        bbox_writer = BBoxWriter(
+            output_path=bbox_path,
+            video_path=video,
+            video_width=video_width,
+            video_height=video_height,
+            fps=getattr(vid, "fps", None),
+            total_frames=frames_to_process,
+            prompt_type=prompt_type_str,
+            prompt_value=prompt_value_str,
+            obj_names=prompt.obj_names,
+        )
+
+    if seg_path:
+        seg_writer = SegmentationWriter(
+            output_path=seg_path,
+            video_path=video,
+            video_width=video_width,
+            video_height=video_height,
+            max_objects=max(10, prompt.num_objects) if not use_text else 10,
+            fps=getattr(vid, "fps", None),
+            total_frames=frames_to_process,
+            obj_names=prompt.obj_names,
+        )
+
+    try:
+        # Load video frames
+        if not quiet:
+            console.print("Loading video frames...")
+
+        video_frames = []
+        for i in range(frames_to_process):
+            if _interrupted:
+                break
+            frame = vid[i]
+            # Ensure RGB format
+            if frame.ndim == 2:
+                frame = np.stack([frame] * 3, axis=-1)
+            elif frame.shape[-1] == 4:
+                frame = frame[..., :3]
+            video_frames.append(frame)
+
+        if _interrupted:
+            console.print("[yellow]Interrupted during frame loading[/yellow]")
+            return
+
+        # Initialize tracking session
+        if not quiet:
+            console.print("Initializing tracking session...")
+
+        tracker.init_session(
+            video_frames=video_frames,
+            use_text=use_text,
+            video_storage_device="cpu",
+            max_vision_cache_size=4,
+        )
+
+        # Add prompt
+        if use_text:
+            tracker.add_text_prompt(prompt.text)
+        else:
+            tracker.add_prompt(prompt)
+
+        # Run tracking with progress
+        if not quiet:
+            console.print("Tracking...")
+            console.print()
+
+        frames_processed = 0
+        total_objects = 0
+
+        progress = Progress(
+            TextColumn("[bold blue]{task.description}"),
+            BarColumn(),
+            MofNCompleteColumn(),
+            FPSColumn(),
+            ObjectsColumn(),
+            TimeElapsedColumn(),
+            TimeRemainingColumn(),
+            console=console,
+            disable=quiet,
+        )
+
+        with progress:
+            task = progress.add_task("Processing", total=frames_to_process)
+
+            for result in tracker.propagate(max_frames=max_frames):
+                if _interrupted:
+                    break
+
+                # Update outputs
+                if bbox_writer:
+                    bbox_writer.add_result(result)
+                if seg_writer:
+                    seg_writer.add_result(result)
+
+                frames_processed += 1
+                total_objects = max(total_objects, result.num_objects)
+
+                progress.update(task, advance=1, objects=result.num_objects)
+
+        # Save outputs
+        if not quiet:
+            console.print()
+
+        if bbox_writer:
+            bbox_writer.save()
+            if not quiet:
+                console.print(f"[green]Saved bounding boxes:[/green] {bbox_path}")
+
+        if seg_writer:
+            seg_writer.finalize()
+            if not quiet:
+                console.print(f"[green]Saved segmentation masks:[/green] {seg_path}")
+
+        # Summary
+        if not quiet:
+            console.print()
+            if _interrupted:
+                console.print(
+                    f"[yellow]Processed {frames_processed}/{frames_to_process} frames "
+                    f"(interrupted)[/yellow]"
+                )
+            else:
+                console.print(
+                    f"[green]Processed {frames_processed} frames, "
+                    f"{total_objects} objects tracked[/green]"
+                )
+
+    except Exception as e:
+        # Check for CUDA OOM specifically
+        import torch
+
+        if isinstance(e, torch.cuda.OutOfMemoryError):
+            console.print()
+            console.print("[red]Error: GPU out of memory[/red]")
+            console.print()
+            console.print("Try one of these solutions:")
+            console.print("  1. Use --max-frames to process fewer frames")
+            console.print("  2. Use a GPU with more memory")
+            console.print("  3. Close other GPU applications")
+            raise typer.Exit(1)
+        console.print()
+        console.print(f"[red]Error during tracking: {e}[/red]")
+        raise typer.Exit(1)
+
+    finally:
+        tracker.close()
+        if seg_writer:
+            seg_writer.close()
 
 
 @app.command()

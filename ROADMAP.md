@@ -55,14 +55,14 @@ Progress tracking for `sam-track` implementation. See [Investigation Notes](scra
 
 ## Phase 6: CLI Implementation
 
-- [ ] 6.1.1 Implement main CLI with typer
-- [ ] 6.1.2 Handle prompt option mutual exclusivity
-- [ ] 6.1.3 Handle output path defaults
-- [ ] 6.1.4 Add progress bar with rich
-- [ ] 6.2.1 Add --device option
-- [ ] 6.2.2 Add --max-frames option
-- [ ] 6.2.3 Add verbose/quiet mode
-- [ ] 6.3.1 Handle CUDA OOM gracefully
+- [x] 6.1.1 Implement main CLI with typer
+- [x] 6.1.2 Handle prompt option mutual exclusivity
+- [x] 6.1.3 Handle output path defaults
+- [x] 6.1.4 Add progress bar with rich
+- [x] 6.2.1 Add --device option
+- [x] 6.2.2 Add --max-frames option
+- [x] 6.2.3 Add verbose/quiet mode
+- [x] 6.3.1 Handle CUDA OOM gracefully
 - [ ] 6.3.2 Add batch processing mode
 
 ## Phase 7: Testing & CI/CD
@@ -70,7 +70,7 @@ Progress tracking for `sam-track` implementation. See [Investigation Notes](scra
 - [x] 7.1.1 Create test fixtures
 - [x] 7.1.2 Write unit tests for prompts
 - [x] 7.1.3 Write unit tests for outputs
-- [ ] 7.1.4 Write CLI integration tests
+- [x] 7.1.4 Write CLI integration tests
 - [ ] 7.2.1 Set up GitHub Actions CI
 - [ ] 7.2.2 Add GPU testing workflow
 - [ ] 7.2.3 Add code coverage reporting

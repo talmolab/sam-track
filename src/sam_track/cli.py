@@ -201,6 +201,36 @@ def track(
             help="Custom path for segmentation output (implies --seg).",
         ),
     ] = None,
+    slp_output: Annotated[
+        Path | None,
+        typer.Option(
+            "--slp",
+            help="Output path for tracked SLP (default: <pose>.sam-tracked.slp). "
+            "Only valid with --pose.",
+        ),
+    ] = None,
+    # Pose integration options
+    remove_unmatched: Annotated[
+        bool,
+        typer.Option(
+            "--remove-unmatched",
+            help="Remove poses that couldn't be matched to a SAM3 mask from output.",
+        ),
+    ] = False,
+    exclude_nodes: Annotated[
+        str | None,
+        typer.Option(
+            "--exclude-nodes",
+            help="Comma-separated list of nodes to exclude from matching.",
+        ),
+    ] = None,
+    filter_by_pose: Annotated[
+        bool,
+        typer.Option(
+            "--filter-by-pose",
+            help="Only include masks/boxes that matched a pose in output.",
+        ),
+    ] = False,
     # Advanced options
     device: Annotated[
         str | None,
@@ -240,7 +270,7 @@ def track(
     """Track objects in a video using SAM3.
 
     Requires exactly one prompt type (--text, --roi, or --pose) and at least
-    one output format (--bbox or --seg).
+    one output format (--bbox, --seg, or --slp for pose mode).
 
     By default, uses streaming mode which processes frames one at a time for
     memory efficiency. Use --preload to load all frames upfront (slightly
@@ -254,8 +284,11 @@ def track(
         # Track with ROI file, output both formats
         uv run sam-track track video.mp4 --roi rois.yml --bbox --seg
 
-        # Track with pose file, custom output path
-        uv run sam-track track video.mp4 --pose labels.slp --bbox results.json
+        # Track with pose file, output tracked SLP
+        uv run sam-track track video.mp4 --pose labels.slp --slp
+
+        # Track with pose file, all outputs
+        uv run sam-track track video.mp4 --pose labels.slp --bbox --seg --slp
 
         # Use preload mode for faster text prompt processing
         uv run sam-track track video.mp4 --text "mouse" --bbox --preload
@@ -288,10 +321,32 @@ def track(
     # Validate at least one output format
     has_bbox = bbox or bbox_output is not None
     has_seg = seg or seg_output is not None
+    has_slp = slp_output is not None
 
-    if not has_bbox and not has_seg:
-        console.print("[red]Error: Must specify at least one of --bbox or --seg[/red]")
+    if not has_bbox and not has_seg and not has_slp:
+        console.print(
+            "[red]Error: Must specify at least one of --bbox, --seg, or --slp[/red]"
+        )
         raise typer.Exit(1)
+
+    # Validate --slp only with --pose
+    if has_slp and pose is None:
+        console.print("[red]Error: --slp is only valid with --pose[/red]")
+        raise typer.Exit(1)
+
+    # Validate pose-specific options
+    if pose is None:
+        if remove_unmatched:
+            console.print(
+                "[red]Error: --remove-unmatched is only valid with --pose[/red]"
+            )
+            raise typer.Exit(1)
+        if exclude_nodes:
+            console.print("[red]Error: --exclude-nodes is only valid with --pose[/red]")
+            raise typer.Exit(1)
+        if filter_by_pose:
+            console.print("[red]Error: --filter-by-pose is only valid with --pose[/red]")
+            raise typer.Exit(1)
 
     # Validate ROI file exists
     if roi is not None and not roi.exists():
@@ -306,11 +361,14 @@ def track(
     # Resolve output paths
     bbox_path = bbox_output or (video.with_suffix(".bbox.json") if has_bbox else None)
     seg_path = seg_output or (video.with_suffix(".seg.h5") if has_seg else None)
+    slp_path = slp_output or (
+        pose.with_suffix(".sam-tracked.slp") if has_slp and pose else None
+    )
 
     # === Setup ===
     if not quiet:
         _print_config(
-            video, text, roi, pose, bbox_path, seg_path, device, max_frames, preload
+            video, text, roi, pose, bbox_path, seg_path, slp_path, device, max_frames, preload
         )
 
     # Register signal handler for graceful shutdown
@@ -324,10 +382,14 @@ def track(
             pose=pose,
             bbox_path=bbox_path,
             seg_path=seg_path,
+            slp_path=slp_path,
             device=device,
             max_frames=max_frames,
             quiet=quiet,
             preload=preload,
+            remove_unmatched=remove_unmatched,
+            exclude_nodes=exclude_nodes,
+            filter_by_pose=filter_by_pose,
         )
     except KeyboardInterrupt:
         # Already handled by signal handler
@@ -348,6 +410,7 @@ def _print_config(
     pose: Path | None,
     bbox_path: Path | None,
     seg_path: Path | None,
+    slp_path: Path | None,
     device: str | None,
     max_frames: int | None,
     preload: bool,
@@ -370,6 +433,8 @@ def _print_config(
         table.add_row("BBox output:", str(bbox_path))
     if seg_path:
         table.add_row("Seg output:", str(seg_path))
+    if slp_path:
+        table.add_row("SLP output:", str(slp_path))
 
     table.add_row("Mode:", "preload" if preload else "streaming")
     if device:
@@ -389,10 +454,14 @@ def _run_tracking(
     pose: Path | None,
     bbox_path: Path | None,
     seg_path: Path | None,
+    slp_path: Path | None,
     device: str | None,
     max_frames: int | None,
     quiet: bool,
     preload: bool,
+    remove_unmatched: bool = False,
+    exclude_nodes: str | None = None,
+    filter_by_pose: bool = False,
 ) -> None:
     """Run the tracking pipeline.
 
@@ -404,13 +473,14 @@ def _run_tracking(
 
     from sleap_io import Video
 
-    from .outputs import BBoxWriter, SegmentationWriter
+    from .outputs import BBoxWriter, SegmentationWriter, SLPWriter
     from .prompts import (
         PosePromptHandler,
         PromptType,
         ROIPromptHandler,
         TextPromptHandler,
     )
+    from .reconciliation import IDReconciler
     from .tracker import SAM3Tracker
 
     # Load video
@@ -462,9 +532,26 @@ def _run_tracking(
         console.print("Loading SAM3 model...")
     tracker = SAM3Tracker(device=device)
 
+    # Check for multi-frame pose mode
+    is_multi_frame_pose = (
+        pose is not None and prompt_handler.num_labeled_frames > 1
+    )
+
+    if is_multi_frame_pose and not quiet:
+        console.print(
+            f"  Multi-frame mode: {prompt_handler.num_labeled_frames} labeled frames"
+        )
+
+    # Parse exclude_nodes
+    excluded_nodes_set = None
+    if exclude_nodes:
+        excluded_nodes_set = set(n.strip() for n in exclude_nodes.split(","))
+
     # Initialize output writers
     bbox_writer = None
     seg_writer = None
+    slp_writer = None
+    reconciler = None
 
     if bbox_path:
         bbox_writer = BBoxWriter(
@@ -491,12 +578,29 @@ def _run_tracking(
             obj_names=prompt.obj_names,
         )
 
+    if slp_path and pose is not None:
+        import sleap_io as sio
+
+        source_labels = sio.load_slp(str(pose), open_videos=False)
+        slp_writer = SLPWriter(
+            output_path=slp_path,
+            source_labels=source_labels,
+            remove_unmatched=remove_unmatched,
+        )
+
+        # Initialize reconciler for pose matching
+        reconciler = IDReconciler(
+            skeleton=prompt_handler.skeleton,
+            exclude_nodes=excluded_nodes_set or set(),
+        )
+
     try:
         if preload:
             _run_tracking_preload(
                 vid=vid,
                 tracker=tracker,
                 prompt=prompt,
+                prompt_handler=prompt_handler if pose else None,
                 use_text=use_text,
                 video_height=video_height,
                 video_width=video_width,
@@ -504,19 +608,27 @@ def _run_tracking(
                 max_frames=max_frames,
                 bbox_writer=bbox_writer,
                 seg_writer=seg_writer,
+                slp_writer=slp_writer,
+                reconciler=reconciler,
+                filter_by_pose=filter_by_pose,
                 quiet=quiet,
             )
         else:
+            # Streaming mode (no pose reconciliation - requires preload)
             _run_tracking_streaming(
                 vid=vid,
                 tracker=tracker,
                 prompt=prompt,
+                prompt_handler=prompt_handler if pose else None,
                 use_text=use_text,
                 video_height=video_height,
                 video_width=video_width,
                 frames_to_process=frames_to_process,
                 bbox_writer=bbox_writer,
                 seg_writer=seg_writer,
+                slp_writer=slp_writer,
+                reconciler=reconciler,
+                filter_by_pose=filter_by_pose,
                 quiet=quiet,
             )
 
@@ -545,18 +657,23 @@ def _run_tracking(
         tracker.close()
         if seg_writer:
             seg_writer.close()
+        # Note: slp_writer doesn't need explicit close - finalize() handles it
 
 
 def _run_tracking_streaming(
     vid,
     tracker,
     prompt,
+    prompt_handler,
     use_text: bool,
     video_height: int,
     video_width: int,
     frames_to_process: int,
     bbox_writer,
     seg_writer,
+    slp_writer,
+    reconciler,
+    filter_by_pose: bool,
     quiet: bool,
 ) -> None:
     """Run tracking in streaming mode (frame-by-frame, memory-efficient)."""
@@ -600,6 +717,14 @@ def _run_tracking_streaming(
         disable=quiet,
     )
 
+    # Get GT frame indices for reconciliation
+    gt_frame_indices = set()
+    if reconciler and prompt_handler:
+        gt_frame_indices = set(prompt_handler.labeled_frame_indices)
+
+    # For filter_by_pose, track which object IDs matched poses
+    matched_obj_ids: set[int] = set()
+
     with progress:
         task = progress.add_task("Processing", total=frames_to_process)
 
@@ -619,11 +744,60 @@ def _run_tracking_streaming(
             # Process frame
             result = tracker.process_frame(frame)
 
-            # Update outputs
-            if bbox_writer:
-                bbox_writer.add_result(result)
-            if seg_writer:
-                seg_writer.add_result(result)
+            # Run reconciliation at GT frames
+            if reconciler and frame_idx in gt_frame_indices:
+                lf = prompt_handler._build_frame_map().get(frame_idx)
+                if lf is not None:
+                    import sleap_io as sio
+
+                    gt_instances = [
+                        i for i in lf.instances if type(i) == sio.Instance
+                    ]
+                    pred_instances = [
+                        i for i in lf.instances if type(i) == sio.PredictedInstance
+                    ]
+                    instances = gt_instances if gt_instances else pred_instances
+
+                    # Match poses to masks
+                    assignments = reconciler.match_frame(
+                        frame_idx=frame_idx,
+                        poses=instances,
+                        masks=result.masks,
+                        object_ids=result.object_ids,
+                    )
+
+                    # Track matched object IDs for filtering
+                    for a in assignments:
+                        matched_obj_ids.add(a.sam3_obj_id)
+
+                    # Add to SLP writer
+                    if slp_writer:
+                        slp_writer.add_frame_assignments(
+                            frame_idx=frame_idx,
+                            assignments=assignments,
+                            original_instances=instances,
+                        )
+
+            # Update outputs (with optional pose filtering)
+            if filter_by_pose and matched_obj_ids:
+                mask = np.isin(result.object_ids, list(matched_obj_ids))
+                if mask.any():
+                    filtered_result = type(result)(
+                        frame_idx=result.frame_idx,
+                        object_ids=result.object_ids[mask],
+                        masks=result.masks[mask],
+                        boxes=result.boxes[mask],
+                        scores=result.scores[mask],
+                    )
+                    if bbox_writer:
+                        bbox_writer.add_result(filtered_result)
+                    if seg_writer:
+                        seg_writer.add_result(filtered_result)
+            else:
+                if bbox_writer:
+                    bbox_writer.add_result(result)
+                if seg_writer:
+                    seg_writer.add_result(result)
 
             frames_processed += 1
             total_objects = max(total_objects, result.num_objects)
@@ -634,6 +808,8 @@ def _run_tracking_streaming(
     _save_outputs(
         bbox_writer=bbox_writer,
         seg_writer=seg_writer,
+        slp_writer=slp_writer,
+        reconciler=reconciler,
         frames_processed=frames_processed,
         frames_to_process=frames_to_process,
         total_objects=total_objects,
@@ -645,6 +821,7 @@ def _run_tracking_preload(
     vid,
     tracker,
     prompt,
+    prompt_handler,
     use_text: bool,
     video_height: int,
     video_width: int,
@@ -652,6 +829,9 @@ def _run_tracking_preload(
     max_frames: int | None,
     bbox_writer,
     seg_writer,
+    slp_writer,
+    reconciler,
+    filter_by_pose: bool,
     quiet: bool,
 ) -> None:
     """Run tracking in preload mode (all frames loaded upfront)."""
@@ -716,6 +896,14 @@ def _run_tracking_preload(
         disable=quiet,
     )
 
+    # Get GT frame indices for reconciliation
+    gt_frame_indices = set()
+    if reconciler and prompt_handler:
+        gt_frame_indices = set(prompt_handler.labeled_frame_indices)
+
+    # For filter_by_pose, track which object IDs matched poses
+    matched_obj_ids: set[int] = set()
+
     with progress:
         task = progress.add_task("Processing", total=frames_to_process)
 
@@ -723,11 +911,62 @@ def _run_tracking_preload(
             if _interrupted:
                 break
 
-            # Update outputs
-            if bbox_writer:
-                bbox_writer.add_result(result)
-            if seg_writer:
-                seg_writer.add_result(result)
+            frame_idx = result.frame_idx
+
+            # Run reconciliation at GT frames
+            if reconciler and frame_idx in gt_frame_indices:
+                lf = prompt_handler._build_frame_map().get(frame_idx)
+                if lf is not None:
+                    import sleap_io as sio
+
+                    gt_instances = [
+                        i for i in lf.instances if type(i) == sio.Instance
+                    ]
+                    pred_instances = [
+                        i for i in lf.instances if type(i) == sio.PredictedInstance
+                    ]
+                    instances = gt_instances if gt_instances else pred_instances
+
+                    # Match poses to masks
+                    assignments = reconciler.match_frame(
+                        frame_idx=frame_idx,
+                        poses=instances,
+                        masks=result.masks,
+                        object_ids=result.object_ids,
+                    )
+
+                    # Track matched object IDs for filtering
+                    for a in assignments:
+                        matched_obj_ids.add(a.sam3_obj_id)
+
+                    # Add to SLP writer
+                    if slp_writer:
+                        slp_writer.add_frame_assignments(
+                            frame_idx=frame_idx,
+                            assignments=assignments,
+                            original_instances=instances,
+                        )
+
+            # Update outputs (with optional pose filtering)
+            if filter_by_pose and matched_obj_ids:
+                mask = np.isin(result.object_ids, list(matched_obj_ids))
+                if mask.any():
+                    filtered_result = type(result)(
+                        frame_idx=result.frame_idx,
+                        object_ids=result.object_ids[mask],
+                        masks=result.masks[mask],
+                        boxes=result.boxes[mask],
+                        scores=result.scores[mask],
+                    )
+                    if bbox_writer:
+                        bbox_writer.add_result(filtered_result)
+                    if seg_writer:
+                        seg_writer.add_result(filtered_result)
+            else:
+                if bbox_writer:
+                    bbox_writer.add_result(result)
+                if seg_writer:
+                    seg_writer.add_result(result)
 
             frames_processed += 1
             total_objects = max(total_objects, result.num_objects)
@@ -738,6 +977,8 @@ def _run_tracking_preload(
     _save_outputs(
         bbox_writer=bbox_writer,
         seg_writer=seg_writer,
+        slp_writer=slp_writer,
+        reconciler=reconciler,
         frames_processed=frames_processed,
         frames_to_process=frames_to_process,
         total_objects=total_objects,
@@ -748,6 +989,8 @@ def _run_tracking_preload(
 def _save_outputs(
     bbox_writer,
     seg_writer,
+    slp_writer,
+    reconciler,
     frames_processed: int,
     frames_to_process: int,
     total_objects: int,
@@ -772,6 +1015,20 @@ def _save_outputs(
             console.print(
                 f"[green]Saved segmentation masks:[/green] {seg_writer.output_path}"
             )
+
+    if slp_writer:
+        slp_writer.finalize()
+        if not quiet:
+            console.print(
+                f"[green]Saved tracked poses:[/green] {slp_writer.output_path}"
+            )
+            if reconciler:
+                swaps = reconciler.detect_swaps()
+                if swaps:
+                    console.print(
+                        f"  [yellow]Warning: {len(swaps)} identity swap(s) "
+                        f"detected[/yellow]"
+                    )
 
     # Summary
     if not quiet:

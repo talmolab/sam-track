@@ -17,8 +17,10 @@ class PosePromptHandler(PromptHandler):
 
     The handler supports:
     - Automatic frame selection (first labeled frame) or specific frame
+    - Multi-frame access via get_prompt() and labeled_frame_indices
     - Node filtering to use only specific keypoints
     - Track-based object IDs when available
+    - GT vs prediction instance handling (GT takes precedence)
 
     Example:
         >>> handler = PosePromptHandler("path/to/labels.slp")
@@ -32,6 +34,12 @@ class PosePromptHandler(PromptHandler):
         ...     "labels.slp",
         ...     nodes=["head", "neck", "tail_base"]
         ... )
+
+        # Multi-frame access
+        >>> handler = PosePromptHandler("labels.slp")
+        >>> for frame_idx in handler.labeled_frame_indices:
+        ...     prompt = handler.get_prompt(frame_idx)
+        ...     print(f"Frame {frame_idx}: {prompt.num_objects} objects")
     """
 
     def __init__(
@@ -55,6 +63,7 @@ class PosePromptHandler(PromptHandler):
         self.nodes = nodes
 
         self._labels: sio.Labels | None = None
+        self._frame_map: dict[int, sio.LabeledFrame] | None = None
 
     @property
     def prompt_type(self) -> PromptType:
@@ -87,37 +96,56 @@ class PosePromptHandler(PromptHandler):
         """Number of tracks in the file."""
         return len(self._load_labels().tracks)
 
-    def load(self) -> Prompt:
-        """Load pose prompts from SLP file.
+    @property
+    def video(self) -> sio.Video:
+        """The video from the SLP file."""
+        return self._load_labels().video
+
+    def _build_frame_map(self) -> dict[int, sio.LabeledFrame]:
+        """Build frame index on first access. O(n) once, O(1) thereafter.
+
+        Returns:
+            Dictionary mapping frame indices to LabeledFrame objects.
+        """
+        if self._frame_map is None:
+            labels = self._load_labels()
+            # Use find() to get frames for this video (tolerates multi-video projects)
+            frames = labels.find(labels.video)
+            self._frame_map = {lf.frame_idx: lf for lf in frames}
+        return self._frame_map
+
+    @property
+    def labeled_frame_indices(self) -> list[int]:
+        """Sorted frame indices that have labels."""
+        return sorted(self._build_frame_map().keys())
+
+    def _build_prompt(self, lf: sio.LabeledFrame) -> Prompt:
+        """Build a Prompt from a LabeledFrame.
+
+        This method handles GT vs prediction instance separation. If a frame
+        has any GT instances (sio.Instance), only GT instances are used.
+        Otherwise, predictions (sio.PredictedInstance) are used.
+
+        Args:
+            lf: The LabeledFrame to extract prompts from.
 
         Returns:
             A Prompt object with point sets for each instance.
 
         Raises:
-            FileNotFoundError: If the SLP file doesn't exist.
-            ValueError: If the file has no labeled frames or no instances
-                at the specified frame.
+            ValueError: If no instances have visible points.
         """
-        if not self.path.exists():
-            raise FileNotFoundError(f"SLP file not found: {self.path}")
-
         labels = self._load_labels()
-
-        if len(labels.labeled_frames) == 0:
-            raise ValueError(f"No labeled frames in {self.path}")
-
-        # Find target frame
-        if self.frame_idx is not None:
-            lf = next(
-                (f for f in labels.labeled_frames if f.frame_idx == self.frame_idx),
-                None,
-            )
-            if lf is None:
-                raise ValueError(f"No labels at frame {self.frame_idx} in {self.path}")
-        else:
-            lf = labels.labeled_frames[0]
-
         skeleton = labels.skeleton
+
+        # Separate GT from predictions (CRITICAL: use type(), not isinstance())
+        # PredictedInstance is a subclass of Instance, so isinstance() would
+        # match both types. We need exact type checking.
+        gt_instances = [i for i in lf.instances if type(i) == sio.Instance]
+        pred_instances = [i for i in lf.instances if type(i) == sio.PredictedInstance]
+
+        # GT takes precedence - if any GT exists, ignore predictions
+        instances = gt_instances if gt_instances else pred_instances
 
         # Build node filter mask if nodes specified
         if self.nodes:
@@ -129,7 +157,7 @@ class PosePromptHandler(PromptHandler):
         obj_names = {}
         points = []
 
-        for i, inst in enumerate(lf.instances):
+        for i, inst in enumerate(instances):
             coords = inst.numpy()  # (n_nodes, 2)
             visible_mask = ~np.isnan(coords[:, 0])
 
@@ -172,6 +200,59 @@ class PosePromptHandler(PromptHandler):
             points=points,
             source_path=self.path,
         )
+
+    def get_prompt(self, frame_idx: int) -> Prompt | None:
+        """Get prompt for a specific frame.
+
+        This provides O(1) access to prompts at any labeled frame after an
+        initial O(n) index build.
+
+        Args:
+            frame_idx: The frame index to get prompts for.
+
+        Returns:
+            A Prompt object if the frame has labels, None otherwise.
+        """
+        lf = self._build_frame_map().get(frame_idx)
+        if lf is None:
+            return None
+        return self._build_prompt(lf)
+
+    def load(self) -> Prompt:
+        """Load pose prompts from SLP file.
+
+        This is the primary method for single-frame prompt loading. For
+        multi-frame access, use get_prompt() with labeled_frame_indices.
+
+        Returns:
+            A Prompt object with point sets for each instance.
+
+        Raises:
+            FileNotFoundError: If the SLP file doesn't exist.
+            ValueError: If the file has no labeled frames or no instances
+                at the specified frame.
+        """
+        if not self.path.exists():
+            raise FileNotFoundError(f"SLP file not found: {self.path}")
+
+        labels = self._load_labels()
+
+        if len(labels.labeled_frames) == 0:
+            raise ValueError(f"No labeled frames in {self.path}")
+
+        # Find target frame
+        if self.frame_idx is not None:
+            lf = self._build_frame_map().get(self.frame_idx)
+            if lf is None:
+                raise ValueError(f"No labels at frame {self.frame_idx} in {self.path}")
+        else:
+            # Use the frame with minimum frame_idx, not the first in the unsorted list
+            # Note: labeled_frames list order is arbitrary (insertion order),
+            # so we must use labeled_frame_indices to get sorted order
+            first_frame_idx = self.labeled_frame_indices[0]
+            lf = self._build_frame_map()[first_frame_idx]
+
+        return self._build_prompt(lf)
 
     def __repr__(self) -> str:
         """String representation."""

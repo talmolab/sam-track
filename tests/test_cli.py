@@ -100,7 +100,7 @@ class TestTrackValidation:
 
         result = runner.invoke(app, ["track", str(video), "--text", "mouse"])
         assert result.exit_code == 1
-        assert "Must specify at least one of --bbox or --seg" in result.stdout
+        assert "Must specify at least one of --bbox, --seg, or --slp" in result.stdout
 
     def test_roi_file_not_found(self, tmp_path: Path):
         """Test error when ROI file doesn't exist."""

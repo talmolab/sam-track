@@ -468,6 +468,100 @@ class SAM3Tracker:
         if self._prompt_frame_idx is None:
             self._prompt_frame_idx = prompt.frame_idx
 
+        # Track which objects have been prompted (for streaming mode)
+        if not hasattr(self, "_tracked_obj_ids"):
+            self._tracked_obj_ids: set[int] = set()
+        self._tracked_obj_ids.update(prompt.obj_ids)
+
+    def add_streaming_prompt(
+        self,
+        prompt: Prompt,
+        original_size: tuple[int, int],
+    ) -> list[int]:
+        """Add prompts for NEW objects during streaming mode.
+
+        This method allows adding new objects to track mid-stream. Based on
+        SAM3 experimentation, this works for NEW objects but NOT for correcting
+        existing tracks (re-prompting existing objects destabilizes tracking).
+
+        Args:
+            prompt: A Prompt object containing the new objects to track.
+            original_size: Frame size as (height, width).
+
+        Returns:
+            List of object IDs that were actually added (excludes already-tracked).
+
+        Raises:
+            RuntimeError: If not in streaming mode or no active session.
+            ValueError: If prompt type is TEXT.
+        """
+        if not self.is_session_active:
+            raise RuntimeError("No active session. Call init_streaming_session() first.")
+
+        if not self._streaming:
+            raise RuntimeError(
+                "add_streaming_prompt() only works in streaming mode. "
+                "Use add_prompt() before propagate() for batch mode."
+            )
+
+        if prompt.prompt_type == PromptType.TEXT:
+            raise ValueError(
+                "Cannot add text prompts mid-stream. "
+                "Use visual prompts (POSE, ROI) for streaming mode."
+            )
+
+        # Initialize tracking set if needed
+        if not hasattr(self, "_tracked_obj_ids"):
+            self._tracked_obj_ids = set()
+
+        # Current frame index (use last processed frame)
+        current_frame = max(0, self._frame_idx - 1)
+
+        added_ids = []
+        for i, obj_id in enumerate(prompt.obj_ids):
+            # Skip objects already being tracked
+            if obj_id in self._tracked_obj_ids:
+                continue
+
+            # Prepare inputs for this object
+            kwargs: dict = {
+                "inference_session": self._inference_session,
+                "frame_idx": current_frame,
+                "obj_ids": obj_id,
+                "original_size": original_size,
+            }
+
+            # Add mask if available (preferred - most accurate)
+            if prompt.masks is not None and i < len(prompt.masks):
+                kwargs["input_masks"] = prompt.masks[i]
+
+            # Add points if available
+            elif prompt.points is not None and i < len(prompt.points):
+                points = prompt.points[i]
+                # Format: [[[[x, y], [x, y], ...]]]
+                kwargs["input_points"] = [[[[p[0], p[1]] for p in points]]]
+                # All points are positive (foreground)
+                kwargs["input_labels"] = [[[1] * len(points)]]
+
+            # Add box if available
+            elif prompt.boxes is not None and i < len(prompt.boxes):
+                box = prompt.boxes[i]
+                # Format: [[[x_min, y_min, x_max, y_max]]]
+                kwargs["input_boxes"] = [[[box[0], box[1], box[2], box[3]]]]
+
+            else:
+                # Skip objects without valid prompt data
+                continue
+
+            # Add to session
+            self._visual_processor.add_inputs_to_inference_session(**kwargs)
+
+            # Track this object
+            self._tracked_obj_ids.add(obj_id)
+            added_ids.append(obj_id)
+
+        return added_ids
+
     def propagate(
         self,
         max_frames: int | None = None,

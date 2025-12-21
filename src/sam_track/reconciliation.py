@@ -58,6 +58,7 @@ class TrackAssignment:
         pose_idx: Index of the pose in the frame's instance list.
         sam3_obj_id: SAM3 object ID that was matched.
         confidence: Match quality score (0-1, higher is better).
+        sam3_score: SAM3 mask detection confidence score.
     """
 
     frame_idx: int
@@ -65,6 +66,7 @@ class TrackAssignment:
     pose_idx: int
     sam3_obj_id: int
     confidence: float
+    sam3_score: float = 1.0
 
 
 @dataclass
@@ -187,6 +189,7 @@ class IDReconciler:
         poses: list["sio.Instance"],
         masks: np.ndarray,
         object_ids: np.ndarray,
+        scores: np.ndarray | None = None,
     ) -> list[TrackAssignment]:
         """Match poses to masks for a single frame.
 
@@ -198,12 +201,17 @@ class IDReconciler:
             poses: List of pose instances to match.
             masks: Array of masks with shape (N, H, W) or (N, 1, H, W).
             object_ids: Array of SAM3 object IDs corresponding to masks.
+            scores: Optional SAM3 mask detection confidence scores, shape (N,).
 
         Returns:
             List of valid TrackAssignment objects.
         """
         if len(poses) == 0 or len(masks) == 0:
             return []
+
+        # Default scores to 1.0 if not provided
+        if scores is None:
+            scores = np.ones(len(object_ids))
 
         # Handle (N, 1, H, W) mask format from SAM3
         if masks.ndim == 4 and masks.shape[1] == 1:
@@ -263,6 +271,7 @@ class IDReconciler:
                     pose_idx=pose_idx,
                     sam3_obj_id=ctx.sam3_obj_id,
                     confidence=confidence,
+                    sam3_score=float(scores[mask_idx]),
                 )
                 assignments.append(assignment)
 

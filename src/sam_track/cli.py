@@ -764,6 +764,7 @@ def _run_tracking_streaming(
                         poses=instances,
                         masks=result.masks,
                         object_ids=result.object_ids,
+                        scores=result.scores,
                     )
 
                     # Track matched object IDs for filtering
@@ -933,6 +934,7 @@ def _run_tracking_preload(
                         poses=instances,
                         masks=result.masks,
                         object_ids=result.object_ids,
+                        scores=result.scores,
                     )
 
                     # Track matched object IDs for filtering

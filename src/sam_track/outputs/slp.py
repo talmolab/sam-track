@@ -98,6 +98,38 @@ class SLPWriter:
             self._tracks[name] = sio.Track(name=name)
         return self._tracks[name]
 
+    def _copy_instance_with_track(
+        self, inst: sio.Instance, track: sio.Track | None, tracking_score: float | None = None
+    ) -> sio.Instance:
+        """Copy an instance with a new track, preserving the original type.
+
+        Args:
+            inst: Original instance (Instance or PredictedInstance).
+            track: Track to assign to the new instance.
+            tracking_score: Optional tracking score to assign (e.g., from SAM3 matching).
+                If None, preserves the original tracking_score.
+
+        Returns:
+            A new instance of the same type with the new track.
+        """
+        score = tracking_score if tracking_score is not None else inst.tracking_score
+        if type(inst) == sio.PredictedInstance:
+            return sio.PredictedInstance(
+                points=inst.points.copy(),
+                skeleton=self._skeleton,
+                track=track,
+                score=inst.score,
+                tracking_score=score,
+            )
+        else:
+            return sio.Instance(
+                points=inst.points.copy(),
+                skeleton=self._skeleton,
+                track=track,
+                tracking_score=score,
+                from_predicted=inst.from_predicted,
+            )
+
     def finalize(self) -> sio.Labels:
         """Build and save the final Labels object.
 
@@ -109,15 +141,19 @@ class SLPWriter:
         for frame_idx in sorted(self._frame_data.keys()):
             assignments, original_instances = self._frame_data[frame_idx]
 
-            # Build assignment lookup: pose_idx -> (track_name, sam3_id)
-            pose_to_assignment: dict[int, tuple[str | None, int]] = {}
+            # Build assignment lookup: pose_idx -> (track_name, sam3_id, confidence)
+            pose_to_assignment: dict[int, tuple[str | None, int, float]] = {}
             for a in assignments:
-                pose_to_assignment[a.pose_idx] = (a.pose_track_name, a.sam3_obj_id)
+                pose_to_assignment[a.pose_idx] = (
+                    a.pose_track_name,
+                    a.sam3_obj_id,
+                    a.confidence,
+                )
 
             new_instances = []
             for i, inst in enumerate(original_instances):
                 if i in pose_to_assignment:
-                    track_name, sam3_id = pose_to_assignment[i]
+                    track_name, sam3_id, confidence = pose_to_assignment[i]
 
                     # Determine track name
                     if track_name:
@@ -127,22 +163,17 @@ class SLPWriter:
                         track = self._get_or_create_track(f"track_{sam3_id}")
 
                     # Create new instance with track assignment
-                    # We need to copy the points properly
-                    new_inst = sio.Instance(
-                        points=inst.points.copy(),
-                        skeleton=self._skeleton,
-                        track=track,
+                    # Preserve the original instance type (Instance vs PredictedInstance)
+                    # Use pose-mask matching confidence as tracking_score
+                    new_inst = self._copy_instance_with_track(
+                        inst, track, tracking_score=confidence
                     )
                     new_instances.append(new_inst)
 
                 elif not self.remove_unmatched:
                     # Keep unmatched instance without track
                     # Preserve existing track if present
-                    new_inst = sio.Instance(
-                        points=inst.points.copy(),
-                        skeleton=self._skeleton,
-                        track=inst.track,
-                    )
+                    new_inst = self._copy_instance_with_track(inst, inst.track)
                     new_instances.append(new_inst)
                 # else: remove_unmatched=True and no assignment, skip this instance
 

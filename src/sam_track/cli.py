@@ -240,12 +240,28 @@ def track(
             help="Device for inference (e.g., cuda, cuda:0, mps, cpu).",
         ),
     ] = None,
+    start_frame: Annotated[
+        int,
+        typer.Option(
+            "--start-frame",
+            help="Frame index to start processing from (0-indexed).",
+        ),
+    ] = 0,
+    stop_frame: Annotated[
+        int | None,
+        typer.Option(
+            "--stop-frame",
+            help="Frame index to stop processing at (exclusive). "
+            "Mutually exclusive with --max-frames.",
+        ),
+    ] = None,
     max_frames: Annotated[
         int | None,
         typer.Option(
             "--max-frames",
             "-n",
-            help="Maximum number of frames to process.",
+            help="Maximum number of frames to process from start. "
+            "Mutually exclusive with --stop-frame.",
         ),
     ] = None,
     quiet: Annotated[
@@ -360,6 +376,27 @@ def track(
         console.print(f"[red]Error: Pose file not found: {pose}[/red]")
         raise typer.Exit(1)
 
+    # Validate frame range options
+    if stop_frame is not None and max_frames is not None:
+        console.print(
+            "[red]Error: --stop-frame and --max-frames are mutually exclusive[/red]"
+        )
+        raise typer.Exit(1)
+
+    if start_frame < 0:
+        console.print("[red]Error: --start-frame must be non-negative[/red]")
+        raise typer.Exit(1)
+
+    if stop_frame is not None and stop_frame <= start_frame:
+        console.print(
+            "[red]Error: --stop-frame must be greater than --start-frame[/red]"
+        )
+        raise typer.Exit(1)
+
+    if max_frames is not None and max_frames <= 0:
+        console.print("[red]Error: --max-frames must be positive[/red]")
+        raise typer.Exit(1)
+
     # Resolve output paths
     bbox_path = bbox_output or (video.with_suffix(".bbox.json") if has_bbox else None)
     seg_path = seg_output or (video.with_suffix(".seg.h5") if has_seg else None)
@@ -378,6 +415,8 @@ def track(
             seg_path,
             slp_path,
             device,
+            start_frame,
+            stop_frame,
             max_frames,
             preload,
         )
@@ -395,6 +434,8 @@ def track(
             seg_path=seg_path,
             slp_path=slp_path,
             device=device,
+            start_frame=start_frame,
+            stop_frame=stop_frame,
             max_frames=max_frames,
             quiet=quiet,
             preload=preload,
@@ -423,6 +464,8 @@ def _print_config(
     seg_path: Path | None,
     slp_path: Path | None,
     device: str | None,
+    start_frame: int,
+    stop_frame: int | None,
     max_frames: int | None,
     preload: bool,
 ) -> None:
@@ -450,8 +493,15 @@ def _print_config(
     table.add_row("Mode:", "preload" if preload else "streaming")
     if device:
         table.add_row("Device:", device)
-    if max_frames:
-        table.add_row("Max frames:", str(max_frames))
+
+    # Show frame range info
+    if start_frame > 0 or stop_frame is not None or max_frames is not None:
+        if stop_frame is not None:
+            table.add_row("Frame range:", f"{start_frame}:{stop_frame}")
+        elif max_frames is not None:
+            table.add_row("Frame range:", f"{start_frame}:+{max_frames}")
+        else:
+            table.add_row("Start frame:", str(start_frame))
 
     console.print()
     console.print(Panel(table, title="[bold]sam-track[/bold]", border_style="blue"))
@@ -467,6 +517,8 @@ def _run_tracking(
     seg_path: Path | None,
     slp_path: Path | None,
     device: str | None,
+    start_frame: int,
+    stop_frame: int | None,
     max_frames: int | None,
     quiet: bool,
     preload: bool,
@@ -535,8 +587,26 @@ def _run_tracking(
             for obj_id in prompt.obj_ids:
                 console.print(f"    - {prompt.get_name(obj_id)} (id={obj_id})")
 
-    # Limit frames if requested
-    frames_to_process = min(num_frames, max_frames) if max_frames else num_frames
+    # Validate start_frame against video length
+    if start_frame >= num_frames:
+        console.print(
+            f"[red]Error: --start-frame ({start_frame}) exceeds video length "
+            f"({num_frames} frames)[/red]"
+        )
+        raise typer.Exit(1)
+
+    # Calculate frame range
+    # stop_frame takes precedence if specified (already validated as mutually exclusive)
+    if stop_frame is not None:
+        # Clamp stop_frame to video length
+        actual_stop = min(stop_frame, num_frames)
+        frames_to_process = actual_stop - start_frame
+    elif max_frames is not None:
+        # start_frame + max_frames, clamped to video length
+        frames_to_process = min(max_frames, num_frames - start_frame)
+    else:
+        # Process from start_frame to end
+        frames_to_process = num_frames - start_frame
 
     # Initialize tracker
     if not quiet:
@@ -613,8 +683,8 @@ def _run_tracking(
                 use_text=use_text,
                 video_height=video_height,
                 video_width=video_width,
+                start_frame=start_frame,
                 frames_to_process=frames_to_process,
-                max_frames=max_frames,
                 bbox_writer=bbox_writer,
                 seg_writer=seg_writer,
                 slp_writer=slp_writer,
@@ -632,6 +702,7 @@ def _run_tracking(
                 use_text=use_text,
                 video_height=video_height,
                 video_width=video_width,
+                start_frame=start_frame,
                 frames_to_process=frames_to_process,
                 bbox_writer=bbox_writer,
                 seg_writer=seg_writer,
@@ -677,6 +748,7 @@ def _run_tracking_streaming(
     use_text: bool,
     video_height: int,
     video_width: int,
+    start_frame: int,
     frames_to_process: int,
     bbox_writer,
     seg_writer,
@@ -737,9 +809,12 @@ def _run_tracking_streaming(
     with progress:
         task = progress.add_task("Processing", total=frames_to_process)
 
-        for frame_idx in range(frames_to_process):
+        for i in range(frames_to_process):
             if _interrupted:
                 break
+
+            # Actual frame index in the video
+            frame_idx = start_frame + i
 
             # Load single frame
             frame = vid[frame_idx]
@@ -752,6 +827,18 @@ def _run_tracking_streaming(
 
             # Process frame
             result = tracker.process_frame(frame)
+
+            # Update result's frame_idx to actual video frame index
+            # (tracker uses internal 0-based counter)
+            from .tracker import TrackingResult
+
+            result = TrackingResult(
+                frame_idx=frame_idx,
+                object_ids=result.object_ids,
+                masks=result.masks,
+                boxes=result.boxes,
+                scores=result.scores,
+            )
 
             # Run reconciliation at GT frames
             if reconciler and frame_idx in gt_frame_indices:
@@ -833,8 +920,8 @@ def _run_tracking_preload(
     use_text: bool,
     video_height: int,
     video_width: int,
+    start_frame: int,
     frames_to_process: int,
-    max_frames: int | None,
     bbox_writer,
     seg_writer,
     slp_writer,
@@ -847,7 +934,7 @@ def _run_tracking_preload(
 
     import numpy as np
 
-    # Load video frames
+    # Load video frames from the specified range
     if not quiet:
         console.print("Loading video frames...")
 
@@ -855,7 +942,8 @@ def _run_tracking_preload(
     for i in range(frames_to_process):
         if _interrupted:
             break
-        frame = vid[i]
+        # Load from actual video frame index
+        frame = vid[start_frame + i]
         # Ensure RGB format
         if frame.ndim == 2:
             frame = np.stack([frame] * 3, axis=-1)
@@ -915,11 +1003,23 @@ def _run_tracking_preload(
     with progress:
         task = progress.add_task("Processing", total=frames_to_process)
 
-        for result in tracker.propagate(max_frames=max_frames):
+        for result in tracker.propagate():
             if _interrupted:
                 break
 
-            frame_idx = result.frame_idx
+            # Translate internal frame index to actual video frame index
+            frame_idx = start_frame + result.frame_idx
+
+            # Update result with actual video frame index
+            from .tracker import TrackingResult
+
+            result = TrackingResult(
+                frame_idx=frame_idx,
+                object_ids=result.object_ids,
+                masks=result.masks,
+                boxes=result.boxes,
+                scores=result.scores,
+            )
 
             # Run reconciliation at GT frames
             if reconciler and frame_idx in gt_frame_indices:

@@ -174,6 +174,149 @@ class TestTrackOptions:
         assert "--quiet" in output
 
 
+class TestFrameRangeOptions:
+    """Tests for frame range options."""
+
+    def test_start_frame_option(self):
+        """Test --start-frame option is available."""
+        result = runner.invoke(app, ["track", "--help"])
+        output = strip_ansi(result.stdout)
+        assert "--start-frame" in output
+        assert "0-indexed" in output
+
+    def test_stop_frame_option(self):
+        """Test --stop-frame option is available."""
+        result = runner.invoke(app, ["track", "--help"])
+        output = strip_ansi(result.stdout)
+        assert "--stop-frame" in output
+
+    def test_stop_frame_max_frames_mutual_exclusivity(self, tmp_path: Path):
+        """Test error when both --stop-frame and --max-frames are specified."""
+        video = tmp_path / "test.mp4"
+        video.touch()
+
+        result = runner.invoke(
+            app,
+            [
+                "track",
+                str(video),
+                "--text",
+                "mouse",
+                "--bbox",
+                "--stop-frame",
+                "100",
+                "--max-frames",
+                "50",
+            ],
+        )
+        assert result.exit_code == 1
+        assert "mutually exclusive" in result.stdout
+
+    def test_negative_start_frame(self, tmp_path: Path):
+        """Test error when --start-frame is negative."""
+        video = tmp_path / "test.mp4"
+        video.touch()
+
+        result = runner.invoke(
+            app,
+            [
+                "track",
+                str(video),
+                "--text",
+                "mouse",
+                "--bbox",
+                "--start-frame",
+                "-1",
+            ],
+        )
+        assert result.exit_code == 1
+        assert "non-negative" in result.stdout
+
+    def test_stop_frame_less_than_start(self, tmp_path: Path):
+        """Test error when --stop-frame is less than --start-frame."""
+        video = tmp_path / "test.mp4"
+        video.touch()
+
+        result = runner.invoke(
+            app,
+            [
+                "track",
+                str(video),
+                "--text",
+                "mouse",
+                "--bbox",
+                "--start-frame",
+                "50",
+                "--stop-frame",
+                "30",
+            ],
+        )
+        assert result.exit_code == 1
+        assert "greater than" in result.stdout
+
+    def test_stop_frame_equals_start(self, tmp_path: Path):
+        """Test error when --stop-frame equals --start-frame."""
+        video = tmp_path / "test.mp4"
+        video.touch()
+
+        result = runner.invoke(
+            app,
+            [
+                "track",
+                str(video),
+                "--text",
+                "mouse",
+                "--bbox",
+                "--start-frame",
+                "50",
+                "--stop-frame",
+                "50",
+            ],
+        )
+        assert result.exit_code == 1
+        assert "greater than" in result.stdout
+
+    def test_zero_max_frames(self, tmp_path: Path):
+        """Test error when --max-frames is zero."""
+        video = tmp_path / "test.mp4"
+        video.touch()
+
+        result = runner.invoke(
+            app,
+            [
+                "track",
+                str(video),
+                "--text",
+                "mouse",
+                "--bbox",
+                "--max-frames",
+                "0",
+            ],
+        )
+        assert result.exit_code == 1
+        assert "positive" in result.stdout
+
+    def test_negative_max_frames(self, tmp_path: Path):
+        """Test error when --max-frames is negative."""
+        video = tmp_path / "test.mp4"
+        video.touch()
+
+        result = runner.invoke(
+            app,
+            [
+                "track",
+                str(video),
+                "--text",
+                "mouse",
+                "--bbox",
+                "--max-frames",
+                "-10",
+            ],
+        )
+        assert result.exit_code == 1
+        assert "positive" in result.stdout
+
+
 class TestAuthCommand:
     """Tests for auth command."""
 

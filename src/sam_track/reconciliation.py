@@ -417,3 +417,246 @@ def require_reasonable_mask_area(
         return min_area <= ctx.mask_area <= max_area
 
     return predicate
+
+
+@dataclass
+class TrackNameResolver:
+    """Resolves SAM3 obj_ids to GT track names via nearest-anchor flood fill.
+
+    This class takes the sparse ID mappings from GT anchor frames and propagates
+    them to all frames using a nearest-anchor approach. Each frame uses the
+    mapping from its closest GT anchor frame.
+
+    Attributes:
+        gt_anchors: Mapping of frame_idx -> {sam3_obj_id: track_name} at GT frames.
+        fallback_names: Optional mapping of sam3_obj_id -> name for objects without
+            GT matches (e.g., from initial prompt).
+
+    Example:
+        >>> resolver = TrackNameResolver.from_reconciler(reconciler)
+        >>> # Get track name for a specific frame and object
+        >>> name = resolver.get_track_name(frame_idx=150, sam3_obj_id=1)
+        >>> # Get all mappings for batch processing
+        >>> all_mappings = resolver.resolve_all_frames(total_frames=1000)
+    """
+
+    gt_anchors: dict[int, dict[int, str]] = field(default_factory=dict)
+    fallback_names: dict[int, str] = field(default_factory=dict)
+    _anchor_frames: list[int] = field(default_factory=list, repr=False)
+
+    def __post_init__(self):
+        """Cache sorted anchor frames for efficient lookup."""
+        self._anchor_frames = sorted(self.gt_anchors.keys())
+
+    @classmethod
+    def from_reconciler(
+        cls,
+        reconciler: IDReconciler,
+        fallback_names: dict[int, str] | None = None,
+    ) -> "TrackNameResolver":
+        """Create resolver from an IDReconciler with accumulated assignments.
+
+        Args:
+            reconciler: IDReconciler that has processed GT frames.
+            fallback_names: Optional mapping for objects without GT matches.
+
+        Returns:
+            TrackNameResolver initialized with the reconciler's ID map.
+        """
+        return cls(
+            gt_anchors=reconciler.build_id_map(),
+            fallback_names=fallback_names or {},
+        )
+
+    @classmethod
+    def from_id_map(
+        cls,
+        id_map: dict[int, dict[int, str]],
+        fallback_names: dict[int, str] | None = None,
+    ) -> "TrackNameResolver":
+        """Create resolver from an existing ID map.
+
+        Args:
+            id_map: Mapping of frame_idx -> {sam3_obj_id: track_name}.
+            fallback_names: Optional mapping for objects without GT matches.
+
+        Returns:
+            TrackNameResolver initialized with the ID map.
+        """
+        return cls(
+            gt_anchors=id_map,
+            fallback_names=fallback_names or {},
+        )
+
+    def _find_nearest_anchor(self, frame_idx: int) -> int | None:
+        """Find the nearest GT anchor frame to a given frame.
+
+        Args:
+            frame_idx: The frame index to find nearest anchor for.
+
+        Returns:
+            The frame index of the nearest anchor, or None if no anchors exist.
+        """
+        if not self._anchor_frames:
+            return None
+
+        # Binary search would be faster for large anchor lists,
+        # but linear is fine for typical use cases (< 100 anchors)
+        return min(self._anchor_frames, key=lambda a: abs(frame_idx - a))
+
+    def get_mapping_at_frame(self, frame_idx: int) -> dict[int, str]:
+        """Get the sam3_obj_id -> track_name mapping for a frame.
+
+        Uses the mapping from the nearest GT anchor frame.
+
+        Args:
+            frame_idx: The frame index to get mapping for.
+
+        Returns:
+            Dictionary mapping sam3_obj_id to track_name.
+            Returns empty dict if no GT anchors exist.
+        """
+        nearest = self._find_nearest_anchor(frame_idx)
+        if nearest is None:
+            return {}
+        return self.gt_anchors[nearest]
+
+    def get_track_name(
+        self,
+        frame_idx: int,
+        sam3_obj_id: int,
+        default: str | None = None,
+    ) -> str:
+        """Get track name for a SAM3 obj_id at a given frame.
+
+        Uses the mapping from the nearest GT anchor frame. Falls back to
+        fallback_names, then to a generated name.
+
+        Args:
+            frame_idx: The frame index.
+            sam3_obj_id: The SAM3 object ID.
+            default: Optional default name if not found. If None, generates
+                a name like "track_{sam3_obj_id}".
+
+        Returns:
+            The resolved track name.
+        """
+        mapping = self.get_mapping_at_frame(frame_idx)
+
+        if sam3_obj_id in mapping:
+            return mapping[sam3_obj_id]
+
+        if sam3_obj_id in self.fallback_names:
+            return self.fallback_names[sam3_obj_id]
+
+        if default is not None:
+            return default
+
+        return f"track_{sam3_obj_id}"
+
+    def resolve_all_frames(
+        self,
+        total_frames: int,
+    ) -> dict[int, dict[int, str]]:
+        """Get resolved mappings for all frames.
+
+        Args:
+            total_frames: Total number of frames in the video.
+
+        Returns:
+            Dictionary mapping frame_idx -> {sam3_obj_id: track_name}.
+            Empty frames (no mapping) are not included in the result.
+        """
+        if not self._anchor_frames:
+            return {}
+
+        result: dict[int, dict[int, str]] = {}
+        for frame_idx in range(total_frames):
+            nearest = self._find_nearest_anchor(frame_idx)
+            if nearest is not None:
+                result[frame_idx] = self.gt_anchors[nearest]
+
+        return result
+
+    def get_anchor_frames(self) -> list[int]:
+        """Get sorted list of GT anchor frame indices.
+
+        Returns:
+            List of frame indices where GT anchors exist.
+        """
+        return list(self._anchor_frames)
+
+    def get_all_track_names(self) -> set[str]:
+        """Get all unique track names from GT anchors.
+
+        Returns:
+            Set of all track names found in GT mappings.
+        """
+        names: set[str] = set()
+        for mapping in self.gt_anchors.values():
+            names.update(mapping.values())
+        return names
+
+    def get_all_sam3_obj_ids(self) -> set[int]:
+        """Get all unique SAM3 object IDs from GT anchors.
+
+        Returns:
+            Set of all SAM3 object IDs found in GT mappings.
+        """
+        obj_ids: set[int] = set()
+        for mapping in self.gt_anchors.values():
+            obj_ids.update(mapping.keys())
+        return obj_ids
+
+    def get_canonical_mapping(self) -> dict[int, str]:
+        """Get a canonical sam3_obj_id -> track_name mapping.
+
+        Returns a single global mapping from SAM3 object IDs to track names.
+        For objects that appear in multiple anchors, uses the name from the
+        first anchor frame.
+
+        This is useful for writers that need a single consistent mapping
+        (like BBoxWriter and SegmentationWriter) rather than per-frame mappings.
+
+        Returns:
+            Dictionary mapping sam3_obj_id to track_name.
+        """
+        canonical: dict[int, str] = {}
+
+        # Iterate anchors in frame order to get consistent "first seen" names
+        for frame_idx in self._anchor_frames:
+            mapping = self.gt_anchors[frame_idx]
+            for obj_id, name in mapping.items():
+                if obj_id not in canonical:
+                    canonical[obj_id] = name
+
+        return canonical
+
+    def get_anchor_source(self, frame_idx: int) -> tuple[int | None, str]:
+        """Get the anchor frame and propagation direction for a frame.
+
+        Useful for debugging and visualization.
+
+        Args:
+            frame_idx: The frame index to check.
+
+        Returns:
+            Tuple of (anchor_frame_idx, direction) where direction is one of:
+            - "anchor": frame_idx is a GT anchor
+            - "forward": propagated forward from an earlier anchor
+            - "backward": propagated backward from a later anchor
+            - "none": no anchors exist
+        """
+        if not self._anchor_frames:
+            return (None, "none")
+
+        nearest = self._find_nearest_anchor(frame_idx)
+        if nearest is None:
+            return (None, "none")
+
+        if frame_idx == nearest:
+            return (nearest, "anchor")
+        elif frame_idx > nearest:
+            return (nearest, "forward")
+        else:
+            return (nearest, "backward")

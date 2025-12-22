@@ -272,6 +272,22 @@ class BBoxWriter:
             "statistics": self._compute_statistics(),
         }
 
+    def apply_track_name_mapping(
+        self,
+        mapping: dict[int, str],
+    ) -> None:
+        """Apply a SAM3 obj_id -> track_name mapping to all tracks.
+
+        This updates the `name` attribute of each track based on the provided
+        mapping. Tracks not in the mapping keep their existing names.
+
+        Args:
+            mapping: Dictionary mapping SAM3 obj_id to track name.
+        """
+        for obj_id, track in self.tracks.items():
+            if obj_id in mapping:
+                track.name = mapping[obj_id]
+
     def save(self) -> None:
         """Save all tracks to the JSON file."""
         # Ensure parent directory exists

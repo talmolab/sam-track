@@ -1,6 +1,21 @@
 # sam-track Roadmap
 
-Progress tracking for `sam-track` implementation. See [Investigation Notes](scratch/2025-12-19-sam-track-roadmap/README.md) for detailed design and code examples.
+Progress tracking for `sam-track` implementation.
+
+## Status Summary
+
+| Phase | Status | Description |
+|-------|--------|-------------|
+| Phase 1 | Complete | Project Setup & Dependencies |
+| Phase 2 | Complete | Core Infrastructure |
+| Phase 3 | Complete | Prompt Handlers |
+| Phase 4 | Complete | SAM3 Integration |
+| Phase 5 | Complete | Output Writers |
+| Phase 6 | Complete | CLI Implementation |
+| Phase 7 | Partial | Testing & CI/CD |
+| Phase 8 | In Progress | Documentation & Publishing |
+
+---
 
 ## Phase 1: Project Setup & Dependencies
 
@@ -51,7 +66,10 @@ Progress tracking for `sam-track` implementation. See [Investigation Notes](scra
 - [x] 5.2.1 Implement SegmentationWriter
 - [x] 5.2.2 Add GZIP compression (level 1, single dataset)
 - [x] 5.2.3 Test with large videos
-- ~~5.3.1 Add combined output metadata file~~ (removed: metadata in each file)
+- [x] 5.3.1 Implement SLPWriter for tracked poses
+- [x] 5.3.2 Add pose-mask reconciliation (IDReconciler)
+- [x] 5.3.3 Add track name resolution (TrackNameResolver)
+- ~~5.4.1 Add combined output metadata file~~ (removed: metadata in each file)
 
 ## Phase 6: CLI Implementation
 
@@ -62,9 +80,11 @@ Progress tracking for `sam-track` implementation. See [Investigation Notes](scra
 - [x] 6.2.1 Add --device option
 - [x] 6.2.2 Add --max-frames option
 - [x] 6.2.3 Add verbose/quiet mode
+- [x] 6.2.4 Add --start-frame and --stop-frame options
 - [x] 6.3.1 Handle CUDA OOM gracefully
 - [x] 6.3.2 Add streaming mode as default (--preload for batch mode)
-- [ ] 6.3.3 Add batch processing mode (multiple videos)
+- [x] 6.3.3 Add graceful interrupt handling (Ctrl+C)
+- [ ] 6.4.1 Add batch processing mode (multiple videos)
 
 ## Phase 7: Testing & CI/CD
 
@@ -72,24 +92,36 @@ Progress tracking for `sam-track` implementation. See [Investigation Notes](scra
 - [x] 7.1.2 Write unit tests for prompts
 - [x] 7.1.3 Write unit tests for outputs
 - [x] 7.1.4 Write CLI integration tests
-- [ ] 7.2.1 Set up GitHub Actions CI
-- [ ] 7.2.2 Add GPU testing workflow
-- [ ] 7.2.3 Add code coverage reporting
+- [x] 7.2.1 Set up GitHub Actions CI (lint + test)
+- [x] 7.2.2 Add PyPI publish workflow with OIDC
+- [ ] 7.3.1 Add GPU testing workflow
+- [ ] 7.3.2 Add code coverage reporting
 
 ## Phase 8: Documentation & Publishing
 
-- [ ] 8.1.1 Write comprehensive README
-- [ ] 8.1.2 Add usage examples
-- [ ] 8.1.3 Set up mkdocs
-- [ ] 8.2.1 Configure PyPI publishing
-- [ ] 8.2.2 Add OIDC authentication
+- [x] 8.1.1 Write comprehensive README
+- [x] 8.1.2 Add usage examples
+- [x] 8.1.3 Create CONTRIBUTING.md
+- [ ] 8.2.1 Set up mkdocs
+- [x] 8.3.1 Configure PyPI publishing
+- [x] 8.3.2 Add OIDC trusted publisher
 
 ---
 
-## Open Design Questions
+## Design Decisions Made
 
-- [ ] Text prompt re-detection frequency (first frame only vs periodic)
-- [ ] Multi-object handling from single text prompt
-- [x] Streaming mode for long videos → **Decided: streaming is default, --preload for batch**
-- [x] ROI prompt type → **Decided: polygon-to-mask conversion** (best accuracy)
-- [ ] Graceful shutdown with partial saves
+- [x] Streaming mode for long videos: **streaming is default, --preload for batch**
+- [x] ROI prompt type: **polygon-to-mask conversion** (best accuracy)
+- [x] Track name propagation: **nearest-anchor flood fill** for sparse GT labels
+- [x] Text prompt re-detection: **first frame only** (SAM3 propagates automatically)
+- [x] Multi-object from text: **SAM3 handles internally** (returns multiple masks)
+- [x] Graceful shutdown: **partial saves on interrupt** (Ctrl+C triggers save)
+
+## Future Improvements
+
+- [ ] Batch processing mode (multiple videos)
+- [ ] GPU testing in CI
+- [ ] Code coverage reporting
+- [ ] mkdocs documentation site
+- [ ] Video visualization output
+- [ ] Re-detection at specified intervals

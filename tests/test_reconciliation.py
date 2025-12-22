@@ -11,6 +11,7 @@ from sam_track.reconciliation import (
     MatchContext,
     SwapEvent,
     TrackAssignment,
+    TrackNameResolver,
     default_match_predicate,
     require_min_fraction_inside,
     require_min_keypoints_inside,
@@ -411,3 +412,289 @@ class TestSwapEvent:
         assert swap.track_name == "mouse1"
         assert swap.old_sam3_id == 0
         assert swap.new_sam3_id == 1
+
+
+class TestTrackNameResolver:
+    """Tests for TrackNameResolver class."""
+
+    def test_init_empty(self):
+        """Test initialization with no anchors."""
+        resolver = TrackNameResolver()
+        assert resolver.gt_anchors == {}
+        assert resolver.fallback_names == {}
+        assert resolver.get_anchor_frames() == []
+
+    def test_init_with_anchors(self):
+        """Test initialization with anchor mappings."""
+        anchors = {
+            0: {0: "mouse1", 1: "mouse2"},
+            100: {0: "mouse1", 1: "mouse2"},
+        }
+        resolver = TrackNameResolver(gt_anchors=anchors)
+        assert resolver.get_anchor_frames() == [0, 100]
+
+    def test_from_id_map(self):
+        """Test creating resolver from ID map."""
+        id_map = {
+            0: {0: "mouse1", 1: "mouse2"},
+            50: {1: "mouse1", 0: "mouse2"},  # Swap!
+        }
+        resolver = TrackNameResolver.from_id_map(id_map)
+        assert resolver.get_anchor_frames() == [0, 50]
+
+    def test_from_reconciler(self, simple_skeleton):
+        """Test creating resolver from IDReconciler."""
+        reconciler = IDReconciler(skeleton=simple_skeleton)
+        reconciler._assignments = [
+            TrackAssignment(
+                frame_idx=0,
+                pose_track_name="mouse1",
+                pose_idx=0,
+                sam3_obj_id=0,
+                confidence=1.0,
+            ),
+            TrackAssignment(
+                frame_idx=0,
+                pose_track_name="mouse2",
+                pose_idx=1,
+                sam3_obj_id=1,
+                confidence=1.0,
+            ),
+        ]
+
+        resolver = TrackNameResolver.from_reconciler(reconciler)
+        assert resolver.get_anchor_frames() == [0]
+        assert resolver.get_track_name(0, 0) == "mouse1"
+        assert resolver.get_track_name(0, 1) == "mouse2"
+
+    def test_get_track_name_at_anchor(self):
+        """Test getting track name at an anchor frame."""
+        anchors = {0: {0: "mouse1", 1: "mouse2"}}
+        resolver = TrackNameResolver(gt_anchors=anchors)
+
+        assert resolver.get_track_name(0, 0) == "mouse1"
+        assert resolver.get_track_name(0, 1) == "mouse2"
+
+    def test_get_track_name_forward_propagation(self):
+        """Test track names propagate forward from anchor."""
+        anchors = {0: {0: "mouse1", 1: "mouse2"}}
+        resolver = TrackNameResolver(gt_anchors=anchors)
+
+        # Frames after anchor 0 should use anchor 0's mapping
+        assert resolver.get_track_name(50, 0) == "mouse1"
+        assert resolver.get_track_name(100, 1) == "mouse2"
+
+    def test_get_track_name_backward_propagation(self):
+        """Test track names propagate backward from anchor."""
+        anchors = {100: {0: "mouse1", 1: "mouse2"}}
+        resolver = TrackNameResolver(gt_anchors=anchors)
+
+        # Frames before anchor 100 should use anchor 100's mapping
+        assert resolver.get_track_name(0, 0) == "mouse1"
+        assert resolver.get_track_name(50, 1) == "mouse2"
+
+    def test_get_track_name_nearest_anchor(self):
+        """Test that nearest anchor is used for mapping."""
+        # Anchors at 0 and 100, with different mappings (swap)
+        anchors = {
+            0: {0: "mouse1", 1: "mouse2"},
+            100: {0: "mouse2", 1: "mouse1"},  # Swapped IDs
+        }
+        resolver = TrackNameResolver(gt_anchors=anchors)
+
+        # Frame 25: closer to anchor 0
+        assert resolver.get_track_name(25, 0) == "mouse1"
+        assert resolver.get_track_name(25, 1) == "mouse2"
+
+        # Frame 75: closer to anchor 100
+        assert resolver.get_track_name(75, 0) == "mouse2"
+        assert resolver.get_track_name(75, 1) == "mouse1"
+
+        # Frame 50: equidistant, should pick one (min picks first, which is 0)
+        assert resolver.get_track_name(50, 0) == "mouse1"
+
+    def test_get_track_name_fallback(self):
+        """Test fallback names for unknown obj_ids."""
+        anchors = {0: {0: "mouse1"}}
+        fallback = {2: "extra_mouse"}
+        resolver = TrackNameResolver(gt_anchors=anchors, fallback_names=fallback)
+
+        # obj_id 2 not in anchor, should use fallback
+        assert resolver.get_track_name(0, 2) == "extra_mouse"
+
+    def test_get_track_name_generated_fallback(self):
+        """Test generated fallback names when not in anchors or fallback."""
+        anchors = {0: {0: "mouse1"}}
+        resolver = TrackNameResolver(gt_anchors=anchors)
+
+        # obj_id 5 not anywhere, should generate name
+        assert resolver.get_track_name(0, 5) == "track_5"
+
+    def test_get_track_name_custom_default(self):
+        """Test custom default name."""
+        anchors = {0: {0: "mouse1"}}
+        resolver = TrackNameResolver(gt_anchors=anchors)
+
+        assert resolver.get_track_name(0, 5, default="unknown") == "unknown"
+
+    def test_get_track_name_no_anchors(self):
+        """Test behavior with no anchors."""
+        resolver = TrackNameResolver()
+
+        # Should generate name since no anchors exist
+        assert resolver.get_track_name(0, 0) == "track_0"
+
+    def test_get_mapping_at_frame(self):
+        """Test getting full mapping at a frame."""
+        anchors = {
+            0: {0: "mouse1", 1: "mouse2"},
+            100: {0: "mouse2", 1: "mouse1"},
+        }
+        resolver = TrackNameResolver(gt_anchors=anchors)
+
+        # At anchor
+        assert resolver.get_mapping_at_frame(0) == {0: "mouse1", 1: "mouse2"}
+
+        # Between anchors (closer to 0)
+        assert resolver.get_mapping_at_frame(25) == {0: "mouse1", 1: "mouse2"}
+
+        # Between anchors (closer to 100)
+        assert resolver.get_mapping_at_frame(75) == {0: "mouse2", 1: "mouse1"}
+
+    def test_get_mapping_at_frame_no_anchors(self):
+        """Test mapping returns empty dict when no anchors."""
+        resolver = TrackNameResolver()
+        assert resolver.get_mapping_at_frame(50) == {}
+
+    def test_resolve_all_frames(self):
+        """Test resolving mappings for all frames."""
+        anchors = {
+            0: {0: "mouse1", 1: "mouse2"},
+            10: {0: "mouse2", 1: "mouse1"},  # Swap at frame 10
+        }
+        resolver = TrackNameResolver(gt_anchors=anchors)
+
+        all_mappings = resolver.resolve_all_frames(total_frames=15)
+
+        # Should have mappings for all 15 frames
+        assert len(all_mappings) == 15
+
+        # Frames 0-5 use anchor 0 (closer to 0, or equidistant at frame 5)
+        # Note: frame 5 is equidistant (dist 5 to both), min() picks first (anchor 0)
+        for f in range(6):
+            assert all_mappings[f][0] == "mouse1"
+
+        # Frames 6-14 use anchor 10 (strictly closer to 10)
+        for f in range(6, 15):
+            assert all_mappings[f][0] == "mouse2"
+
+    def test_resolve_all_frames_no_anchors(self):
+        """Test resolve_all_frames with no anchors returns empty."""
+        resolver = TrackNameResolver()
+        assert resolver.resolve_all_frames(total_frames=100) == {}
+
+    def test_get_all_track_names(self):
+        """Test getting all unique track names."""
+        anchors = {
+            0: {0: "mouse1", 1: "mouse2"},
+            100: {0: "mouse2", 1: "mouse1", 2: "mouse3"},
+        }
+        resolver = TrackNameResolver(gt_anchors=anchors)
+
+        names = resolver.get_all_track_names()
+        assert names == {"mouse1", "mouse2", "mouse3"}
+
+    def test_get_all_sam3_obj_ids(self):
+        """Test getting all unique SAM3 obj_ids."""
+        anchors = {
+            0: {0: "mouse1", 1: "mouse2"},
+            100: {0: "mouse2", 2: "mouse3"},
+        }
+        resolver = TrackNameResolver(gt_anchors=anchors)
+
+        obj_ids = resolver.get_all_sam3_obj_ids()
+        assert obj_ids == {0, 1, 2}
+
+    def test_get_anchor_source(self):
+        """Test getting anchor source info for frames."""
+        anchors = {
+            10: {0: "mouse1"},
+            50: {0: "mouse2"},
+        }
+        resolver = TrackNameResolver(gt_anchors=anchors)
+
+        # At anchor
+        assert resolver.get_anchor_source(10) == (10, "anchor")
+        assert resolver.get_anchor_source(50) == (50, "anchor")
+
+        # Before first anchor (backward from 10)
+        assert resolver.get_anchor_source(5) == (10, "backward")
+
+        # After anchor 10, before 50 (forward from 10)
+        assert resolver.get_anchor_source(20) == (10, "forward")
+
+        # After anchor 50 (forward from 50)
+        assert resolver.get_anchor_source(60) == (50, "forward")
+
+    def test_get_anchor_source_no_anchors(self):
+        """Test anchor source with no anchors."""
+        resolver = TrackNameResolver()
+        assert resolver.get_anchor_source(0) == (None, "none")
+
+    def test_get_canonical_mapping(self):
+        """Test getting canonical global mapping."""
+        anchors = {
+            0: {0: "mouse1", 1: "mouse2"},
+            100: {0: "mouse2", 1: "mouse1", 2: "mouse3"},
+        }
+        resolver = TrackNameResolver(gt_anchors=anchors)
+
+        canonical = resolver.get_canonical_mapping()
+
+        # Should have all obj_ids
+        assert 0 in canonical
+        assert 1 in canonical
+        assert 2 in canonical
+
+        # obj_ids 0 and 1 use first anchor's names
+        assert canonical[0] == "mouse1"
+        assert canonical[1] == "mouse2"
+
+        # obj_id 2 only appears in second anchor
+        assert canonical[2] == "mouse3"
+
+    def test_get_canonical_mapping_empty(self):
+        """Test canonical mapping with no anchors."""
+        resolver = TrackNameResolver()
+        assert resolver.get_canonical_mapping() == {}
+
+    def test_flood_fill_scenario_from_readme(self):
+        """Test the flood fill scenario described in the README.
+
+        GT frames at 2 and 7, SAM swap occurs at frame 4.
+        Frames 1-4 should use frame 2's mapping.
+        Frames 5-8 should use frame 7's mapping.
+        """
+        anchors = {
+            2: {1: "mouse1", 2: "mouse2"},  # Before swap
+            7: {2: "mouse1", 1: "mouse2"},  # After swap (IDs swapped)
+        }
+        resolver = TrackNameResolver(gt_anchors=anchors)
+
+        # Frames 1-4: closer to anchor 2
+        # Frame 1: dist to 2 is 1, dist to 7 is 6 -> use anchor 2
+        assert resolver.get_track_name(1, 1) == "mouse1"
+        assert resolver.get_track_name(1, 2) == "mouse2"
+
+        # Frame 4: dist to 2 is 2, dist to 7 is 3 -> use anchor 2
+        assert resolver.get_track_name(4, 1) == "mouse1"
+        assert resolver.get_track_name(4, 2) == "mouse2"
+
+        # Frames 5-8: closer to anchor 7
+        # Frame 5: dist to 2 is 3, dist to 7 is 2 -> use anchor 7
+        assert resolver.get_track_name(5, 1) == "mouse2"  # Note: swapped!
+        assert resolver.get_track_name(5, 2) == "mouse1"
+
+        # Frame 8: dist to 2 is 6, dist to 7 is 1 -> use anchor 7
+        assert resolver.get_track_name(8, 1) == "mouse2"
+        assert resolver.get_track_name(8, 2) == "mouse1"

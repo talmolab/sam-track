@@ -228,6 +228,20 @@ class SegmentationWriter:
 
         self._frames_written += 1
 
+    def apply_track_name_mapping(
+        self,
+        mapping: dict[int, str],
+    ) -> None:
+        """Apply a SAM3 obj_id -> track_name mapping to all tracks.
+
+        This updates the internal name mapping used when finalizing the file.
+        Must be called before finalize().
+
+        Args:
+            mapping: Dictionary mapping SAM3 obj_id to track name.
+        """
+        self._obj_names.update(mapping)
+
     def finalize(self) -> None:
         """Finalize the HDF5 file with track metadata and close it."""
         if self._h5file is None:

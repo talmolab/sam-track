@@ -1009,6 +1009,21 @@ def _save_outputs(
     if not quiet:
         console.print()
 
+    # Apply track name resolution from reconciler to writers
+    if reconciler:
+        from .reconciliation import TrackNameResolver
+
+        resolver = TrackNameResolver.from_reconciler(reconciler)
+        canonical_mapping = resolver.get_canonical_mapping()
+
+        if canonical_mapping:
+            if bbox_writer:
+                bbox_writer.apply_track_name_mapping(canonical_mapping)
+            if seg_writer:
+                seg_writer.apply_track_name_mapping(canonical_mapping)
+            if slp_writer:
+                slp_writer.apply_track_name_mapping(canonical_mapping)
+
     if bbox_writer:
         bbox_writer.save()
         if not quiet:

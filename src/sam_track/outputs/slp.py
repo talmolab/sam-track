@@ -65,6 +65,9 @@ class SLPWriter:
         # Track management - create tracks on demand
         self._tracks: dict[str, sio.Track] = {}
 
+        # Track name resolver for looking up GT names by SAM3 obj_id
+        self._track_name_resolver: dict[int, str] | None = None
+
         # Accumulate assignments per frame: {frame_idx: (assignments, instances)}
         self._frame_data: dict[
             int, tuple[list[TrackAssignment], list[sio.Instance]]
@@ -84,6 +87,23 @@ class SLPWriter:
             original_instances: Original pose instances from the frame.
         """
         self._frame_data[frame_idx] = (assignments, list(original_instances))
+
+    def apply_track_name_mapping(
+        self,
+        mapping: dict[int, str],
+    ) -> None:
+        """Apply a SAM3 obj_id -> track_name mapping.
+
+        This mapping is used when a pose instance doesn't have a track name
+        (e.g., PredictedInstances). The SAM3 obj_id is looked up to get the
+        resolved GT track name.
+
+        Must be called before finalize().
+
+        Args:
+            mapping: Dictionary mapping SAM3 obj_id to track name.
+        """
+        self._track_name_resolver = mapping
 
     def _get_or_create_track(self, name: str) -> sio.Track:
         """Get existing track or create new one.
@@ -160,9 +180,18 @@ class SLPWriter:
 
                     # Determine track name
                     if track_name:
+                        # Use original track name from pose (GT instances)
                         track = self._get_or_create_track(track_name)
+                    elif (
+                        self._track_name_resolver
+                        and sam3_id in self._track_name_resolver
+                    ):
+                        # Use resolved GT track name from mapping (predictions)
+                        track = self._get_or_create_track(
+                            self._track_name_resolver[sam3_id]
+                        )
                     else:
-                        # Use SAM3 ID as track name for untracked poses
+                        # Fallback: Use SAM3 ID as track name
                         track = self._get_or_create_track(f"track_{sam3_id}")
 
                     # Create new instance with track assignment, preserving

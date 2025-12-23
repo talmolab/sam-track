@@ -231,6 +231,14 @@ def track(
             help="Only include masks/boxes that matched a pose in output.",
         ),
     ] = False,
+    ignore_gt_tracks: Annotated[
+        bool,
+        typer.Option(
+            "--ignore-gt-tracks",
+            help="Ignore existing track identities from GT instances, letting SAM3 "
+            "assign new track IDs. Useful for evaluating tracker accuracy.",
+        ),
+    ] = False,
     # Advanced options
     device: Annotated[
         str | None,
@@ -365,6 +373,11 @@ def track(
                 "[red]Error: --filter-by-pose is only valid with --pose[/red]"
             )
             raise typer.Exit(1)
+        if ignore_gt_tracks:
+            console.print(
+                "[red]Error: --ignore-gt-tracks is only valid with --pose[/red]"
+            )
+            raise typer.Exit(1)
 
     # Validate ROI file exists
     if roi is not None and not roi.exists():
@@ -442,6 +455,7 @@ def track(
             remove_unmatched=remove_unmatched,
             exclude_nodes=exclude_nodes,
             filter_by_pose=filter_by_pose,
+            ignore_gt_tracks=ignore_gt_tracks,
         )
     except KeyboardInterrupt:
         # Already handled by signal handler
@@ -525,6 +539,7 @@ def _run_tracking(
     remove_unmatched: bool = False,
     exclude_nodes: str | None = None,
     filter_by_pose: bool = False,
+    ignore_gt_tracks: bool = False,
 ) -> None:
     """Run the tracking pipeline.
 
@@ -573,7 +588,7 @@ def _run_tracking(
         prompt_type_str = "roi"
         prompt_value_str = str(roi)
     else:  # pose
-        prompt_handler = PosePromptHandler(pose)
+        prompt_handler = PosePromptHandler(pose, ignore_tracks=ignore_gt_tracks)
         prompt = prompt_handler.load()
         use_text = False
         prompt_type_str = "pose"
@@ -671,6 +686,7 @@ def _run_tracking(
         reconciler = IDReconciler(
             skeleton=prompt_handler.skeleton,
             exclude_nodes=excluded_nodes_set or set(),
+            ignore_gt_tracks=ignore_gt_tracks,
         )
 
     try:
@@ -1292,6 +1308,13 @@ def system() -> None:
     """Display system information and GPU status."""
     import torch
 
+    from .auth import (
+        SAM3_REPO_ID,
+        check_authentication,
+        check_model_access,
+        get_username,
+    )
+
     # System info table
     table = Table(title="System Information", show_header=False)
     table.add_column("Property", style="cyan")
@@ -1388,6 +1411,44 @@ def system() -> None:
     else:
         console.print()
         console.print("[yellow]![/yellow] No GPU acceleration available, using CPU")
+
+    # HuggingFace authentication status
+    console.print()
+    auth_table = Table(title="HuggingFace Authentication", show_header=False)
+    auth_table.add_column("Property", style="cyan")
+    auth_table.add_column("Value", style="white")
+
+    is_authenticated = check_authentication()
+    has_model_access = check_model_access()
+
+    if is_authenticated:
+        username = get_username()
+        auth_table.add_row("Authenticated", "[green]Yes[/green]")
+        auth_table.add_row("Username", username or "Unknown")
+    else:
+        auth_table.add_row("Authenticated", "[red]No[/red]")
+
+    if has_model_access:
+        auth_table.add_row("SAM3 access", "[green]Granted[/green]")
+    else:
+        auth_table.add_row("SAM3 access", "[red]Not granted[/red]")
+
+    console.print(auth_table)
+
+    # Auth guidance if needed
+    if not is_authenticated:
+        console.print()
+        console.print(
+            "[yellow]![/yellow] Run [cyan]sam-track auth[/cyan] to set up "
+            "HuggingFace authentication"
+        )
+    elif not has_model_access:
+        console.print()
+        console.print(
+            f"[yellow]![/yellow] Request SAM3 access at: "
+            f"[link=https://huggingface.co/{SAM3_REPO_ID}]"
+            f"https://huggingface.co/{SAM3_REPO_ID}[/link]"
+        )
 
 
 if __name__ == "__main__":

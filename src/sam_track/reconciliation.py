@@ -125,6 +125,7 @@ class IDReconciler:
     skeleton: "sio.Skeleton"
     exclude_nodes: set[str] = field(default_factory=set)
     match_predicates: list[MatchPredicate] = field(default_factory=list)
+    ignore_gt_tracks: bool = False
     _assignments: list[TrackAssignment] = field(default_factory=list, repr=False)
 
     def __post_init__(self):
@@ -262,7 +263,11 @@ class IDReconciler:
 
             # Apply match predicates
             if all(pred(pose, mask, ctx) for pred in self.match_predicates):
-                track_name = pose.track.name if pose.track else None
+                # Use None for track_name when ignoring GT tracks
+                if self.ignore_gt_tracks:
+                    track_name = None
+                else:
+                    track_name = pose.track.name if pose.track else None
                 confidence = (
                     keypoints_inside / visible_count if visible_count > 0 else 0.0
                 )

@@ -47,6 +47,7 @@ class PosePromptHandler(PromptHandler):
         path: str | Path,
         frame_idx: int | None = None,
         nodes: list[str] | None = None,
+        ignore_tracks: bool = False,
     ):
         """Initialize pose prompt handler.
 
@@ -57,10 +58,14 @@ class PosePromptHandler(PromptHandler):
             nodes: List of node names to use as prompts. If None (default),
                 uses all visible nodes. Use this to filter to specific
                 body parts (e.g., ["head", "neck", "tail_base"]).
+            ignore_tracks: If True, ignore existing track identities from
+                instances and use index-based IDs instead. Useful for
+                evaluating tracker accuracy on GT data.
         """
         self.path = Path(path)
         self.frame_idx = frame_idx
         self.nodes = nodes
+        self.ignore_tracks = ignore_tracks
 
         self._labels: sio.Labels | None = None
         self._frame_map: dict[int, sio.LabeledFrame] | None = None
@@ -172,7 +177,7 @@ class PosePromptHandler(PromptHandler):
                 continue
 
             # Get object ID from track or instance index
-            if inst.track is not None:
+            if inst.track is not None and not self.ignore_tracks:
                 obj_id = labels.tracks.index(inst.track)
                 name = inst.track.name
             else:

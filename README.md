@@ -17,28 +17,31 @@ Requires Python 3.12+ and [uv](https://docs.astral.sh/uv/).
 
 ```bash
 # Linux/Windows with NVIDIA GPU (CUDA 13.0)
-uv tool install sam-track --python 3.13 \
-  --index https://download.pytorch.org/whl/cu130 \
-  --index https://pypi.org/simple
+uv tool install sam-track --prerelease=allow --with "tokenizers==0.22.1" --index https://download.pytorch.org/whl/cu130 --index-strategy unsafe-best-match
 
 # macOS with Apple Silicon (MPS)
-uv tool install sam-track --python 3.13
+uv tool install sam-track --prerelease=allow --with "tokenizers==0.22.1"
 ```
 
 After installation, `sam-track` is available globally.
+
+<!-- After uv 0.9.19+, this simplifies to:
+uv tool install sam-track --prerelease=allow --with "tokenizers==0.22.1" --torch-backend=auto
+-->
 
 ### Ad-hoc with uvx
 
 ```bash
 # Linux/Windows with NVIDIA GPU
-uvx --python 3.13 \
-  --index https://download.pytorch.org/whl/cu130 \
-  --index https://pypi.org/simple \
-  sam-track --help
+uvx --prerelease=allow --with "tokenizers==0.22.1" --index https://download.pytorch.org/whl/cu130 --index-strategy unsafe-best-match sam-track --help
 
 # macOS with Apple Silicon
-uvx --python 3.13 sam-track --help
+uvx --prerelease=allow --with "tokenizers==0.22.1" sam-track --help
 ```
+
+<!-- After uv 0.9.19+, this simplifies to:
+uvx --prerelease=allow --with "tokenizers==0.22.1" --torch-backend=auto sam-track --help
+-->
 
 ### From source
 

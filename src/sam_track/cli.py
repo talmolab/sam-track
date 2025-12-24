@@ -680,6 +680,7 @@ def _run_tracking(
             output_path=slp_path,
             source_labels=source_labels,
             remove_unmatched=remove_unmatched,
+            clear_unmatched_tracks=ignore_gt_tracks,
         )
 
         # Initialize reconciler for pose matching

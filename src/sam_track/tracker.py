@@ -282,6 +282,46 @@ class SAM3Tracker:
         else:
             return self._process_frame_visual(frame, frame_idx)
 
+    def _prune_output_dict(self, keep_frames: int = 7) -> None:
+        """Prune old frame outputs to prevent unbounded memory growth.
+
+        The transformers SAM3 implementation stores ALL frame outputs in
+        `output_dict_per_obj` and ALL preprocessed frames in `processed_frames`,
+        but only the last `num_maskmem - 1` frames are actually used for memory
+        attention. This causes memory to grow linearly with frame count.
+
+        This method prunes old frame data, keeping only the most recent
+        `keep_frames` frames.
+
+        Args:
+            keep_frames: Number of recent frames to retain. Should be >= num_maskmem
+                (default 7) to ensure memory attention has all needed frames.
+        """
+        if self._inference_session is None:
+            return
+
+        # Prune output_dict_per_obj (per-object mask memory features)
+        output_dict = getattr(self._inference_session, "output_dict_per_obj", None)
+        if output_dict is not None:
+            for obj_idx in output_dict:
+                non_cond = output_dict[obj_idx].get("non_cond_frame_outputs", {})
+                frame_indices = sorted(non_cond.keys())
+
+                if len(frame_indices) > keep_frames:
+                    # Remove oldest frames, keeping the most recent `keep_frames`
+                    for frame_idx in frame_indices[:-keep_frames]:
+                        del non_cond[frame_idx]
+
+        # Prune processed_frames (preprocessed input images)
+        # This dict stores every frame tensor and is never cleaned up by SAM3
+        processed_frames = getattr(self._inference_session, "processed_frames", None)
+        if processed_frames is not None and isinstance(processed_frames, dict):
+            frame_indices = sorted(processed_frames.keys())
+
+            if len(frame_indices) > keep_frames:
+                for frame_idx in frame_indices[:-keep_frames]:
+                    del processed_frames[frame_idx]
+
     def _process_frame_text(self, frame: np.ndarray, frame_idx: int) -> TrackingResult:
         """Process a frame in streaming text mode."""
         # Process frame using the processor
@@ -290,11 +330,17 @@ class SAM3Tracker:
         )
 
         # Run model with processed frame
+        # Note: frame_idx must be passed explicitly to avoid index mismatch
+        # after pruning (len(processed_frames) != actual frame index)
         output = self._text_model(
             inference_session=self._inference_session,
             frame=inputs.pixel_values[0],
+            frame_idx=frame_idx,
             reverse=False,
         )
+
+        # Prune old frame outputs to prevent memory leak
+        self._prune_output_dict(keep_frames=7)
 
         # Post-process outputs
         processed = self._text_processor.postprocess_outputs(
@@ -321,10 +367,16 @@ class SAM3Tracker:
         )
 
         # Run model with processed frame
+        # Note: frame_idx must be passed explicitly to avoid index mismatch
+        # after pruning (len(processed_frames) != actual frame index)
         output = self._visual_model(
             inference_session=self._inference_session,
             frame=inputs.pixel_values[0],
+            frame_idx=frame_idx,
         )
+
+        # Prune old frame outputs to prevent memory leak
+        self._prune_output_dict(keep_frames=7)
 
         # Post-process masks to original resolution
         masks = self._visual_processor.post_process_masks(

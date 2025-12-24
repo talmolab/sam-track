@@ -47,6 +47,7 @@ class SLPWriter:
         output_path: str | Path,
         source_labels: sio.Labels,
         remove_unmatched: bool = False,
+        clear_unmatched_tracks: bool = False,
     ):
         """Initialize SLP writer.
 
@@ -54,9 +55,13 @@ class SLPWriter:
             output_path: Path for output SLP file.
             source_labels: Original SLEAP Labels to copy structure from.
             remove_unmatched: If True, exclude poses without track assignment.
+            clear_unmatched_tracks: If True, set track=None for instances that
+                weren't matched to any SAM3 mask. Useful with --ignore-gt-tracks
+                to ensure output contains only SAM3-assigned tracks.
         """
         self.output_path = Path(output_path)
         self.remove_unmatched = remove_unmatched
+        self.clear_unmatched_tracks = clear_unmatched_tracks
 
         # Clone skeleton and video from source
         self._skeleton = source_labels.skeleton
@@ -202,9 +207,10 @@ class SLPWriter:
                     new_instances.append(new_inst)
 
                 elif not self.remove_unmatched:
-                    # Keep unmatched instance without track
-                    # Preserve existing track if present
-                    new_inst = self._copy_instance_with_track(inst, inst.track)
+                    # Keep unmatched instance
+                    # Clear track if clear_unmatched_tracks is set, otherwise preserve
+                    track = None if self.clear_unmatched_tracks else inst.track
+                    new_inst = self._copy_instance_with_track(inst, track)
                     new_instances.append(new_inst)
                 # else: remove_unmatched=True and no assignment, skip this instance
 

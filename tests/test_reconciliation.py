@@ -8,6 +8,8 @@ import sleap_io as sio
 
 from sam_track.reconciliation import (
     IDReconciler,
+    MaskAssignment,
+    MaskReconciler,
     MatchContext,
     SwapEvent,
     TrackAssignment,
@@ -698,3 +700,460 @@ class TestTrackNameResolver:
         # Frame 8: dist to 2 is 6, dist to 7 is 1 -> use anchor 7
         assert resolver.get_track_name(8, 1) == "mouse2"
         assert resolver.get_track_name(8, 2) == "mouse1"
+
+
+class TestMaskAssignment:
+    """Tests for MaskAssignment dataclass."""
+
+    def test_creation(self):
+        """Test creating a mask assignment."""
+        assignment = MaskAssignment(
+            frame_idx=10,
+            input_track_id=1,
+            input_track_name="mouse1",
+            sam3_obj_id=5,
+            iou=0.85,
+        )
+        assert assignment.frame_idx == 10
+        assert assignment.input_track_id == 1
+        assert assignment.input_track_name == "mouse1"
+        assert assignment.sam3_obj_id == 5
+        assert assignment.iou == 0.85
+        assert assignment.sam3_score == 1.0  # Default
+
+    def test_with_score(self):
+        """Test assignment with custom score."""
+        assignment = MaskAssignment(
+            frame_idx=0,
+            input_track_id=0,
+            input_track_name=None,
+            sam3_obj_id=0,
+            iou=0.5,
+            sam3_score=0.9,
+        )
+        assert assignment.sam3_score == 0.9
+
+    def test_none_track_name(self):
+        """Test assignment with no track name."""
+        assignment = MaskAssignment(
+            frame_idx=0,
+            input_track_id=0,
+            input_track_name=None,
+            sam3_obj_id=0,
+            iou=0.5,
+        )
+        assert assignment.input_track_name is None
+
+
+class TestMaskReconciler:
+    """Tests for MaskReconciler class."""
+
+    @pytest.fixture
+    def sample_masks_overlapping(self):
+        """Create two pairs of overlapping masks for testing."""
+        # Input mask 1: top-left quadrant
+        input1 = np.zeros((100, 100), dtype=np.uint8)
+        input1[:50, :50] = 1
+
+        # Input mask 2: bottom-right quadrant
+        input2 = np.zeros((100, 100), dtype=np.uint8)
+        input2[50:, 50:] = 1
+
+        # SAM3 mask 1: overlaps with input1 (shifted slightly)
+        sam3_1 = np.zeros((100, 100), dtype=np.uint8)
+        sam3_1[10:60, 10:60] = 1  # 40x40 overlap with input1
+
+        # SAM3 mask 2: overlaps with input2 (shifted slightly)
+        sam3_2 = np.zeros((100, 100), dtype=np.uint8)
+        sam3_2[40:90, 40:90] = 1  # 40x40 overlap with input2
+
+        return (
+            np.stack([input1, input2]),  # input_masks
+            np.stack([sam3_1, sam3_2]),  # sam3_masks
+        )
+
+    def test_init_default(self):
+        """Test reconciler initialization with defaults."""
+        reconciler = MaskReconciler()
+        assert reconciler.min_iou == 0.3
+        assert reconciler.track_names == {}
+        assert reconciler.get_assignments() == []
+
+    def test_init_custom(self):
+        """Test reconciler initialization with custom values."""
+        reconciler = MaskReconciler(
+            min_iou=0.5,
+            track_names={0: "mouse1", 1: "mouse2"},
+        )
+        assert reconciler.min_iou == 0.5
+        assert reconciler.track_names == {0: "mouse1", 1: "mouse2"}
+
+    def test_compute_iou_perfect_overlap(self):
+        """Test IoU computation with perfect overlap."""
+        mask = np.ones((50, 50), dtype=np.uint8)
+        iou = MaskReconciler.compute_iou(mask, mask)
+        assert iou == 1.0
+
+    def test_compute_iou_no_overlap(self):
+        """Test IoU computation with no overlap."""
+        mask1 = np.zeros((100, 100), dtype=np.uint8)
+        mask1[:50, :] = 1
+
+        mask2 = np.zeros((100, 100), dtype=np.uint8)
+        mask2[50:, :] = 1
+
+        iou = MaskReconciler.compute_iou(mask1, mask2)
+        assert iou == 0.0
+
+    def test_compute_iou_partial_overlap(self):
+        """Test IoU computation with partial overlap."""
+        mask1 = np.zeros((100, 100), dtype=np.uint8)
+        mask1[:60, :60] = 1  # 3600 pixels
+
+        mask2 = np.zeros((100, 100), dtype=np.uint8)
+        mask2[30:90, 30:90] = 1  # 3600 pixels
+
+        # Intersection: 30:60, 30:60 = 30x30 = 900 pixels
+        # Union: 3600 + 3600 - 900 = 6300 pixels
+        # IoU = 900 / 6300 ≈ 0.143
+        iou = MaskReconciler.compute_iou(mask1, mask2)
+        assert 0.14 < iou < 0.15
+
+    def test_compute_iou_empty_masks(self):
+        """Test IoU computation with empty masks."""
+        empty = np.zeros((50, 50), dtype=np.uint8)
+        iou = MaskReconciler.compute_iou(empty, empty)
+        assert iou == 0.0
+
+    def test_compute_cost_matrix(self, sample_masks_overlapping):
+        """Test cost matrix computation."""
+        input_masks, sam3_masks = sample_masks_overlapping
+        reconciler = MaskReconciler()
+
+        cost = reconciler.compute_cost_matrix(input_masks, sam3_masks)
+
+        assert cost.shape == (2, 2)
+        # Input mask 0 should have higher IoU with SAM3 mask 0
+        assert cost[0, 0] < cost[0, 1]
+        # Input mask 1 should have higher IoU with SAM3 mask 1
+        assert cost[1, 1] < cost[1, 0]
+
+    def test_compute_cost_matrix_empty_input(self):
+        """Test cost matrix with empty input masks."""
+        reconciler = MaskReconciler()
+        sam3_masks = np.ones((2, 50, 50), dtype=np.uint8)
+
+        cost = reconciler.compute_cost_matrix(np.array([]), sam3_masks)
+        assert cost.shape == (0, 2)
+
+    def test_compute_cost_matrix_empty_sam3(self):
+        """Test cost matrix with empty SAM3 masks."""
+        reconciler = MaskReconciler()
+        input_masks = np.ones((2, 50, 50), dtype=np.uint8)
+
+        cost = reconciler.compute_cost_matrix(input_masks, np.array([]))
+        assert cost.shape == (2, 0)
+
+    def test_compute_cost_matrix_4d_sam3(self):
+        """Test cost matrix handles (N, 1, H, W) SAM3 format."""
+        reconciler = MaskReconciler()
+        input_masks = np.ones((2, 50, 50), dtype=np.uint8)
+        sam3_masks = np.ones((2, 1, 50, 50), dtype=np.uint8)  # 4D format
+
+        cost = reconciler.compute_cost_matrix(input_masks, sam3_masks)
+        assert cost.shape == (2, 2)
+
+    def test_match_frame(self, sample_masks_overlapping):
+        """Test frame matching."""
+        input_masks, sam3_masks = sample_masks_overlapping
+        reconciler = MaskReconciler(min_iou=0.1)
+
+        input_track_ids = np.array([1, 2])
+        sam3_obj_ids = np.array([0, 1])
+
+        assignments = reconciler.match_frame(
+            frame_idx=0,
+            input_masks=input_masks,
+            input_track_ids=input_track_ids,
+            sam3_masks=sam3_masks,
+            sam3_obj_ids=sam3_obj_ids,
+        )
+
+        # Both should match (with low threshold)
+        assert len(assignments) == 2
+
+        # Verify correct pairing
+        assignment_map = {a.input_track_id: a.sam3_obj_id for a in assignments}
+        assert assignment_map[1] == 0  # Input track 1 -> SAM3 obj 0
+        assert assignment_map[2] == 1  # Input track 2 -> SAM3 obj 1
+
+    def test_match_frame_with_track_names(self, sample_masks_overlapping):
+        """Test matching with track name resolution."""
+        input_masks, sam3_masks = sample_masks_overlapping
+        reconciler = MaskReconciler(
+            min_iou=0.1,
+            track_names={1: "mouse1", 2: "mouse2"},
+        )
+
+        assignments = reconciler.match_frame(
+            frame_idx=0,
+            input_masks=input_masks,
+            input_track_ids=np.array([1, 2]),
+            sam3_masks=sam3_masks,
+            sam3_obj_ids=np.array([0, 1]),
+        )
+
+        # Verify track names are populated
+        name_map = {a.input_track_id: a.input_track_name for a in assignments}
+        assert name_map[1] == "mouse1"
+        assert name_map[2] == "mouse2"
+
+    def test_match_frame_iou_threshold(self):
+        """Test that IoU threshold filters matches."""
+        # Create masks with low overlap
+        input_mask = np.zeros((100, 100), dtype=np.uint8)
+        input_mask[:30, :30] = 1
+
+        sam3_mask = np.zeros((100, 100), dtype=np.uint8)
+        sam3_mask[20:50, 20:50] = 1  # Small overlap
+
+        reconciler = MaskReconciler(min_iou=0.5)  # High threshold
+
+        assignments = reconciler.match_frame(
+            frame_idx=0,
+            input_masks=np.array([input_mask]),
+            input_track_ids=np.array([1]),
+            sam3_masks=np.array([sam3_mask]),
+            sam3_obj_ids=np.array([0]),
+        )
+
+        # Should be filtered out by IoU threshold
+        assert len(assignments) == 0
+
+    def test_match_frame_accumulates(self, sample_masks_overlapping):
+        """Test that match_frame accumulates assignments."""
+        input_masks, sam3_masks = sample_masks_overlapping
+        reconciler = MaskReconciler(min_iou=0.1)
+
+        # First frame
+        reconciler.match_frame(
+            frame_idx=0,
+            input_masks=input_masks,
+            input_track_ids=np.array([1, 2]),
+            sam3_masks=sam3_masks,
+            sam3_obj_ids=np.array([0, 1]),
+        )
+        assert len(reconciler.get_assignments()) == 2
+
+        # Second frame
+        reconciler.match_frame(
+            frame_idx=10,
+            input_masks=input_masks,
+            input_track_ids=np.array([1, 2]),
+            sam3_masks=sam3_masks,
+            sam3_obj_ids=np.array([0, 1]),
+        )
+        assert len(reconciler.get_assignments()) == 4
+
+    def test_match_frame_empty_input(self):
+        """Test matching with empty input masks."""
+        reconciler = MaskReconciler()
+        sam3_masks = np.ones((2, 50, 50), dtype=np.uint8)
+
+        assignments = reconciler.match_frame(
+            frame_idx=0,
+            input_masks=np.array([]),
+            input_track_ids=np.array([]),
+            sam3_masks=sam3_masks,
+            sam3_obj_ids=np.array([0, 1]),
+        )
+
+        assert len(assignments) == 0
+
+    def test_detect_swaps_no_swaps(self):
+        """Test swap detection with consistent assignments."""
+        reconciler = MaskReconciler(track_names={1: "mouse1"})
+        reconciler._assignments = [
+            MaskAssignment(
+                frame_idx=0,
+                input_track_id=1,
+                input_track_name="mouse1",
+                sam3_obj_id=0,
+                iou=0.9,
+            ),
+            MaskAssignment(
+                frame_idx=10,
+                input_track_id=1,
+                input_track_name="mouse1",
+                sam3_obj_id=0,
+                iou=0.85,
+            ),
+        ]
+
+        swaps = reconciler.detect_swaps()
+        assert len(swaps) == 0
+
+    def test_detect_swaps_with_swap(self):
+        """Test swap detection when identity changes."""
+        reconciler = MaskReconciler(track_names={1: "mouse1"})
+        reconciler._assignments = [
+            MaskAssignment(
+                frame_idx=0,
+                input_track_id=1,
+                input_track_name="mouse1",
+                sam3_obj_id=0,
+                iou=0.9,
+            ),
+            MaskAssignment(
+                frame_idx=10,
+                input_track_id=1,
+                input_track_name="mouse1",
+                sam3_obj_id=1,  # Changed!
+                iou=0.85,
+            ),
+        ]
+
+        swaps = reconciler.detect_swaps()
+        assert len(swaps) == 1
+        assert swaps[0].track_name == "mouse1"
+        assert swaps[0].old_sam3_id == 0
+        assert swaps[0].new_sam3_id == 1
+        assert swaps[0].frame_idx == 10
+
+    def test_detect_swaps_multiple_tracks(self):
+        """Test swap detection with multiple tracks."""
+        reconciler = MaskReconciler()
+        reconciler._assignments = [
+            MaskAssignment(
+                frame_idx=0, input_track_id=1, input_track_name=None,
+                sam3_obj_id=0, iou=0.9
+            ),
+            MaskAssignment(
+                frame_idx=0, input_track_id=2, input_track_name=None,
+                sam3_obj_id=1, iou=0.9
+            ),
+            MaskAssignment(
+                frame_idx=10, input_track_id=1, input_track_name=None,
+                sam3_obj_id=1, iou=0.85  # Track 1 swapped to obj 1
+            ),
+            MaskAssignment(
+                frame_idx=10, input_track_id=2, input_track_name=None,
+                sam3_obj_id=0, iou=0.85  # Track 2 swapped to obj 0
+            ),
+        ]
+
+        swaps = reconciler.detect_swaps()
+        assert len(swaps) == 2
+
+    def test_build_id_map(self):
+        """Test building frame-to-ID mapping."""
+        reconciler = MaskReconciler(track_names={1: "mouse1", 2: "mouse2"})
+        reconciler._assignments = [
+            MaskAssignment(
+                frame_idx=0, input_track_id=1, input_track_name="mouse1",
+                sam3_obj_id=0, iou=0.9
+            ),
+            MaskAssignment(
+                frame_idx=0, input_track_id=2, input_track_name="mouse2",
+                sam3_obj_id=1, iou=0.85
+            ),
+            MaskAssignment(
+                frame_idx=10, input_track_id=1, input_track_name="mouse1",
+                sam3_obj_id=0, iou=0.8
+            ),
+        ]
+
+        id_map = reconciler.build_id_map()
+        assert 0 in id_map
+        assert 10 in id_map
+        assert id_map[0][0] == "mouse1"
+        assert id_map[0][1] == "mouse2"
+        assert id_map[10][0] == "mouse1"
+
+    def test_build_id_map_fallback_names(self):
+        """Test ID map uses generated names when track_name is None."""
+        reconciler = MaskReconciler()
+        reconciler._assignments = [
+            MaskAssignment(
+                frame_idx=0, input_track_id=42, input_track_name=None,
+                sam3_obj_id=0, iou=0.9
+            ),
+        ]
+
+        id_map = reconciler.build_id_map()
+        assert id_map[0][0] == "track_42"
+
+    def test_get_iou_stats(self):
+        """Test IoU statistics computation."""
+        reconciler = MaskReconciler()
+        reconciler._assignments = [
+            MaskAssignment(
+                frame_idx=0, input_track_id=1, input_track_name=None,
+                sam3_obj_id=0, iou=0.5
+            ),
+            MaskAssignment(
+                frame_idx=0, input_track_id=2, input_track_name=None,
+                sam3_obj_id=1, iou=0.7
+            ),
+            MaskAssignment(
+                frame_idx=10, input_track_id=1, input_track_name=None,
+                sam3_obj_id=0, iou=0.9
+            ),
+        ]
+
+        stats = reconciler.get_iou_stats()
+        assert stats["min"] == 0.5
+        assert stats["max"] == 0.9
+        assert stats["mean"] == pytest.approx(0.7, abs=0.01)
+        assert stats["median"] == 0.7
+
+    def test_get_iou_stats_empty(self):
+        """Test IoU statistics with no assignments."""
+        reconciler = MaskReconciler()
+        stats = reconciler.get_iou_stats()
+        assert stats == {"min": 0.0, "max": 0.0, "mean": 0.0, "median": 0.0}
+
+    def test_clear(self, sample_masks_overlapping):
+        """Test clearing assignments."""
+        input_masks, sam3_masks = sample_masks_overlapping
+        reconciler = MaskReconciler(min_iou=0.1)
+
+        reconciler.match_frame(
+            frame_idx=0,
+            input_masks=input_masks,
+            input_track_ids=np.array([1, 2]),
+            sam3_masks=sam3_masks,
+            sam3_obj_ids=np.array([0, 1]),
+        )
+        assert len(reconciler.get_assignments()) > 0
+
+        reconciler.clear()
+        assert len(reconciler.get_assignments()) == 0
+
+    def test_integration_with_track_name_resolver(self, sample_masks_overlapping):
+        """Test that MaskReconciler output works with TrackNameResolver."""
+        input_masks, sam3_masks = sample_masks_overlapping
+        reconciler = MaskReconciler(
+            min_iou=0.1,
+            track_names={1: "mouse1", 2: "mouse2"},
+        )
+
+        # Match at frame 0
+        reconciler.match_frame(
+            frame_idx=0,
+            input_masks=input_masks,
+            input_track_ids=np.array([1, 2]),
+            sam3_masks=sam3_masks,
+            sam3_obj_ids=np.array([0, 1]),
+        )
+
+        # Build ID map and create resolver
+        id_map = reconciler.build_id_map()
+        resolver = TrackNameResolver.from_id_map(id_map)
+
+        # Verify resolver works
+        assert resolver.get_track_name(0, 0) == "mouse1"
+        assert resolver.get_track_name(0, 1) == "mouse2"
+        # Propagation to other frames
+        assert resolver.get_track_name(50, 0) == "mouse1"
+        assert resolver.get_track_name(50, 1) == "mouse2"

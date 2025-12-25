@@ -168,6 +168,23 @@ def track(
             help="SLEAP SLP file with pose annotations for point prompts.",
         ),
     ] = None,
+    seg_input: Annotated[
+        Path | None,
+        typer.Option(
+            "--seg-input",
+            "-m",
+            help="seg.h5 file with masks to use as prompts or anchors.",
+        ),
+    ] = None,
+    seg_input_mode: Annotated[
+        str,
+        typer.Option(
+            "--seg-input-mode",
+            help="How to use seg-input masks: 'prompt' (default) uses masks to "
+            "initialize SAM3 tracking; 'anchor' uses masks for post-hoc identity "
+            "correction (requires --text, --roi, or --pose as primary prompt).",
+        ),
+    ] = "prompt",
     # Output options
     bbox: Annotated[
         bool,
@@ -327,20 +344,53 @@ def track(
         console.print(f"[red]Error: Video file not found: {video}[/red]")
         raise typer.Exit(1)
 
-    # Validate mutual exclusivity of prompt options
-    prompts = [("--text", text), ("--roi", roi), ("--pose", pose)]
-    provided_prompts = [(name, val) for name, val in prompts if val is not None]
+    # Validate prompt options
+    # In anchor mode, seg_input is used for reconciliation, not as a primary prompt
+    if seg_input_mode == "anchor":
+        # Primary prompts for anchor mode
+        prompts = [
+            ("--text", text),
+            ("--roi", roi),
+            ("--pose", pose),
+        ]
+        provided_prompts = [(name, val) for name, val in prompts if val is not None]
 
-    if len(provided_prompts) == 0:
-        console.print("[red]Error: Must specify one of --text, --roi, or --pose[/red]")
-        raise typer.Exit(1)
+        if len(provided_prompts) == 0:
+            console.print(
+                "[red]Error: --seg-input-mode anchor requires a primary prompt "
+                "(--text, --roi, or --pose)[/red]"
+            )
+            raise typer.Exit(1)
 
-    if len(provided_prompts) > 1:
-        names = ", ".join(name for name, _ in provided_prompts)
-        console.print(
-            f"[red]Error: Only one prompt type allowed, but got: {names}[/red]"
-        )
-        raise typer.Exit(1)
+        if len(provided_prompts) > 1:
+            names = ", ".join(name for name, _ in provided_prompts)
+            console.print(
+                f"[red]Error: Only one primary prompt type allowed, but got: {names}[/red]"
+            )
+            raise typer.Exit(1)
+    else:
+        # Prompt mode: all prompts are mutually exclusive
+        prompts = [
+            ("--text", text),
+            ("--roi", roi),
+            ("--pose", pose),
+            ("--seg-input", seg_input),
+        ]
+        provided_prompts = [(name, val) for name, val in prompts if val is not None]
+
+        if len(provided_prompts) == 0:
+            console.print(
+                "[red]Error: Must specify one of "
+                "--text, --roi, --pose, or --seg-input[/red]"
+            )
+            raise typer.Exit(1)
+
+        if len(provided_prompts) > 1:
+            names = ", ".join(name for name, _ in provided_prompts)
+            console.print(
+                f"[red]Error: Only one prompt type allowed, but got: {names}[/red]"
+            )
+            raise typer.Exit(1)
 
     # Validate at least one output format
     has_bbox = bbox or bbox_output is not None
@@ -389,6 +439,36 @@ def track(
         console.print(f"[red]Error: Pose file not found: {pose}[/red]")
         raise typer.Exit(1)
 
+    # Validate seg-input file exists
+    if seg_input is not None and not seg_input.exists():
+        console.print(
+            f"[red]Error: Segmentation input file not found: {seg_input}[/red]"
+        )
+        raise typer.Exit(1)
+
+    # Validate seg-input-mode
+    if seg_input_mode not in ("prompt", "anchor"):
+        console.print(
+            f"[red]Error: --seg-input-mode must be 'prompt' or 'anchor', "
+            f"got '{seg_input_mode}'[/red]"
+        )
+        raise typer.Exit(1)
+
+    # Validate anchor mode requirements
+    if seg_input_mode == "anchor":
+        if seg_input is None:
+            console.print(
+                "[red]Error: --seg-input-mode anchor requires --seg-input[/red]"
+            )
+            raise typer.Exit(1)
+        # Anchor mode requires another prompt source
+        if text is None and roi is None and pose is None:
+            console.print(
+                "[red]Error: --seg-input-mode anchor requires a primary prompt "
+                "(--text, --roi, or --pose)[/red]"
+            )
+            raise typer.Exit(1)
+
     # Validate frame range options
     if stop_frame is not None and max_frames is not None:
         console.print(
@@ -424,6 +504,8 @@ def track(
             text,
             roi,
             pose,
+            seg_input,
+            seg_input_mode,
             bbox_path,
             seg_path,
             slp_path,
@@ -443,6 +525,8 @@ def track(
             text=text,
             roi=roi,
             pose=pose,
+            seg_input=seg_input,
+            seg_input_mode=seg_input_mode,
             bbox_path=bbox_path,
             seg_path=seg_path,
             slp_path=slp_path,
@@ -474,6 +558,8 @@ def _print_config(
     text: str | None,
     roi: Path | None,
     pose: Path | None,
+    seg_input: Path | None,
+    seg_input_mode: str,
     bbox_path: Path | None,
     seg_path: Path | None,
     slp_path: Path | None,
@@ -496,6 +582,12 @@ def _print_config(
         table.add_row("Prompt:", f"roi: {roi}")
     elif pose:
         table.add_row("Prompt:", f"pose: {pose}")
+    elif seg_input and seg_input_mode == "prompt":
+        table.add_row("Prompt:", f"seg-input: {seg_input}")
+
+    # Show anchor mode info
+    if seg_input and seg_input_mode == "anchor":
+        table.add_row("Mask anchors:", str(seg_input))
 
     if bbox_path:
         table.add_row("BBox output:", str(bbox_path))
@@ -527,6 +619,8 @@ def _run_tracking(
     text: str | None,
     roi: Path | None,
     pose: Path | None,
+    seg_input: Path | None,
+    seg_input_mode: str,
     bbox_path: Path | None,
     seg_path: Path | None,
     slp_path: Path | None,
@@ -553,12 +647,13 @@ def _run_tracking(
 
     from .outputs import BBoxWriter, SegmentationWriter, SLPWriter
     from .prompts import (
+        MaskPromptHandler,
         PosePromptHandler,
         PromptType,
         ROIPromptHandler,
         TextPromptHandler,
     )
-    from .reconciliation import IDReconciler
+    from .reconciliation import IDReconciler, MaskReconciler
     from .tracker import SAM3Tracker
 
     # Load video
@@ -575,6 +670,10 @@ def _run_tracking(
     if not quiet:
         console.print("Loading prompt...")
 
+    # In anchor mode, seg_input is used for reconciliation, not prompting
+    # So we skip it when determining the primary prompt
+    use_seg_input_as_prompt = seg_input and seg_input_mode == "prompt"
+
     if text:
         prompt_handler = TextPromptHandler(text)
         prompt = prompt_handler.load()
@@ -587,12 +686,31 @@ def _run_tracking(
         use_text = False
         prompt_type_str = "roi"
         prompt_value_str = str(roi)
+    elif use_seg_input_as_prompt:
+        prompt_handler = MaskPromptHandler(
+            seg_input,
+            target_resolution=(video_width, video_height),
+        )
+        prompt = prompt_handler.load()
+        use_text = False
+        prompt_type_str = "seg-input"
+        prompt_value_str = str(seg_input)
     else:  # pose
         prompt_handler = PosePromptHandler(pose, ignore_tracks=ignore_gt_tracks)
         prompt = prompt_handler.load()
         use_text = False
         prompt_type_str = "pose"
         prompt_value_str = str(pose)
+
+    # Load mask anchor handler for anchor mode
+    mask_anchor_handler = None
+    if seg_input and seg_input_mode == "anchor":
+        if not quiet:
+            console.print("Loading mask anchors...")
+        mask_anchor_handler = MaskPromptHandler(
+            seg_input,
+            target_resolution=(video_width, video_height),
+        )
 
     if not quiet:
         if prompt.prompt_type == PromptType.TEXT:
@@ -690,6 +808,18 @@ def _run_tracking(
             ignore_gt_tracks=ignore_gt_tracks,
         )
 
+    # Initialize mask reconciler for anchor mode
+    mask_reconciler = None
+    if mask_anchor_handler is not None:
+        track_names = mask_anchor_handler._get_reader().get_track_names()
+        mask_reconciler = MaskReconciler(
+            min_iou=0.3,
+            track_names=track_names,
+        )
+        if not quiet:
+            anchor_frames = mask_anchor_handler.labeled_frame_indices
+            console.print(f"  Mask anchors: {len(anchor_frames)} frame(s)")
+
     try:
         if preload:
             _run_tracking_preload(
@@ -697,6 +827,7 @@ def _run_tracking(
                 tracker=tracker,
                 prompt=prompt,
                 prompt_handler=prompt_handler if pose else None,
+                mask_anchor_handler=mask_anchor_handler,
                 use_text=use_text,
                 video_height=video_height,
                 video_width=video_width,
@@ -706,16 +837,18 @@ def _run_tracking(
                 seg_writer=seg_writer,
                 slp_writer=slp_writer,
                 reconciler=reconciler,
+                mask_reconciler=mask_reconciler,
                 filter_by_pose=filter_by_pose,
                 quiet=quiet,
             )
         else:
-            # Streaming mode (no pose reconciliation - requires preload)
+            # Streaming mode
             _run_tracking_streaming(
                 vid=vid,
                 tracker=tracker,
                 prompt=prompt,
                 prompt_handler=prompt_handler if pose else None,
+                mask_anchor_handler=mask_anchor_handler,
                 use_text=use_text,
                 video_height=video_height,
                 video_width=video_width,
@@ -725,6 +858,7 @@ def _run_tracking(
                 seg_writer=seg_writer,
                 slp_writer=slp_writer,
                 reconciler=reconciler,
+                mask_reconciler=mask_reconciler,
                 filter_by_pose=filter_by_pose,
                 quiet=quiet,
             )
@@ -762,6 +896,7 @@ def _run_tracking_streaming(
     tracker,
     prompt,
     prompt_handler,
+    mask_anchor_handler,
     use_text: bool,
     video_height: int,
     video_width: int,
@@ -771,6 +906,7 @@ def _run_tracking_streaming(
     seg_writer,
     slp_writer,
     reconciler,
+    mask_reconciler,
     filter_by_pose: bool,
     quiet: bool,
 ) -> None:
@@ -815,10 +951,15 @@ def _run_tracking_streaming(
         disable=quiet,
     )
 
-    # Get GT frame indices for reconciliation
+    # Get GT frame indices for pose reconciliation
     gt_frame_indices = set()
     if reconciler and prompt_handler:
         gt_frame_indices = set(prompt_handler.labeled_frame_indices)
+
+    # Get mask anchor frame indices for mask reconciliation
+    mask_anchor_indices = set()
+    if mask_reconciler and mask_anchor_handler:
+        mask_anchor_indices = set(mask_anchor_handler.labeled_frame_indices)
 
     # For filter_by_pose, track which object IDs matched poses
     matched_obj_ids: set[int] = set()
@@ -857,7 +998,7 @@ def _run_tracking_streaming(
                 scores=result.scores,
             )
 
-            # Run reconciliation at GT frames
+            # Run pose reconciliation at GT frames
             if reconciler and frame_idx in gt_frame_indices:
                 lf = prompt_handler._build_frame_map().get(frame_idx)
                 if lf is not None:
@@ -889,6 +1030,22 @@ def _run_tracking_streaming(
                             assignments=assignments,
                             original_instances=instances,
                         )
+
+            # Run mask reconciliation at anchor frames
+            if mask_reconciler and frame_idx in mask_anchor_indices:
+                anchor_prompt = mask_anchor_handler.get_prompt(frame_idx)
+                if anchor_prompt is not None:
+                    input_masks = np.stack(anchor_prompt.masks)
+                    input_track_ids = np.array(anchor_prompt.obj_ids)
+
+                    mask_reconciler.match_frame(
+                        frame_idx=frame_idx,
+                        input_masks=input_masks,
+                        input_track_ids=input_track_ids,
+                        sam3_masks=result.masks,
+                        sam3_obj_ids=result.object_ids,
+                        scores=result.scores,
+                    )
 
             # Update outputs (with optional pose filtering)
             if filter_by_pose and matched_obj_ids:
@@ -922,6 +1079,7 @@ def _run_tracking_streaming(
         seg_writer=seg_writer,
         slp_writer=slp_writer,
         reconciler=reconciler,
+        mask_reconciler=mask_reconciler,
         frames_processed=frames_processed,
         frames_to_process=frames_to_process,
         total_objects=total_objects,
@@ -934,6 +1092,7 @@ def _run_tracking_preload(
     tracker,
     prompt,
     prompt_handler,
+    mask_anchor_handler,
     use_text: bool,
     video_height: int,
     video_width: int,
@@ -943,6 +1102,7 @@ def _run_tracking_preload(
     seg_writer,
     slp_writer,
     reconciler,
+    mask_reconciler,
     filter_by_pose: bool,
     quiet: bool,
 ) -> None:
@@ -1009,10 +1169,15 @@ def _run_tracking_preload(
         disable=quiet,
     )
 
-    # Get GT frame indices for reconciliation
+    # Get GT frame indices for pose reconciliation
     gt_frame_indices = set()
     if reconciler and prompt_handler:
         gt_frame_indices = set(prompt_handler.labeled_frame_indices)
+
+    # Get mask anchor frame indices for mask reconciliation
+    mask_anchor_indices = set()
+    if mask_reconciler and mask_anchor_handler:
+        mask_anchor_indices = set(mask_anchor_handler.labeled_frame_indices)
 
     # For filter_by_pose, track which object IDs matched poses
     matched_obj_ids: set[int] = set()
@@ -1038,7 +1203,7 @@ def _run_tracking_preload(
                 scores=result.scores,
             )
 
-            # Run reconciliation at GT frames
+            # Run pose reconciliation at GT frames
             if reconciler and frame_idx in gt_frame_indices:
                 lf = prompt_handler._build_frame_map().get(frame_idx)
                 if lf is not None:
@@ -1070,6 +1235,22 @@ def _run_tracking_preload(
                             assignments=assignments,
                             original_instances=instances,
                         )
+
+            # Run mask reconciliation at anchor frames
+            if mask_reconciler and frame_idx in mask_anchor_indices:
+                anchor_prompt = mask_anchor_handler.get_prompt(frame_idx)
+                if anchor_prompt is not None:
+                    input_masks = np.stack(anchor_prompt.masks)
+                    input_track_ids = np.array(anchor_prompt.obj_ids)
+
+                    mask_reconciler.match_frame(
+                        frame_idx=frame_idx,
+                        input_masks=input_masks,
+                        input_track_ids=input_track_ids,
+                        sam3_masks=result.masks,
+                        sam3_obj_ids=result.object_ids,
+                        scores=result.scores,
+                    )
 
             # Update outputs (with optional pose filtering)
             if filter_by_pose and matched_obj_ids:
@@ -1103,6 +1284,7 @@ def _run_tracking_preload(
         seg_writer=seg_writer,
         slp_writer=slp_writer,
         reconciler=reconciler,
+        mask_reconciler=mask_reconciler,
         frames_processed=frames_processed,
         frames_to_process=frames_to_process,
         total_objects=total_objects,
@@ -1115,6 +1297,7 @@ def _save_outputs(
     seg_writer,
     slp_writer,
     reconciler,
+    mask_reconciler,
     frames_processed: int,
     frames_to_process: int,
     total_objects: int,
@@ -1126,10 +1309,10 @@ def _save_outputs(
     if not quiet:
         console.print()
 
-    # Apply track name resolution from reconciler to writers
-    if reconciler:
-        from .reconciliation import TrackNameResolver
+    from .reconciliation import TrackNameResolver
 
+    # Apply track name resolution from pose reconciler to writers
+    if reconciler:
         resolver = TrackNameResolver.from_reconciler(reconciler)
         canonical_mapping = resolver.get_canonical_mapping()
 
@@ -1140,6 +1323,19 @@ def _save_outputs(
                 seg_writer.apply_track_name_mapping(canonical_mapping)
             if slp_writer:
                 slp_writer.apply_track_name_mapping(canonical_mapping)
+
+    # Apply track name resolution from mask reconciler to writers
+    # (only if no pose reconciler was used)
+    if mask_reconciler and not reconciler:
+        id_map = mask_reconciler.build_id_map()
+        resolver = TrackNameResolver.from_id_map(id_map)
+        canonical_mapping = resolver.get_canonical_mapping()
+
+        if canonical_mapping:
+            if bbox_writer:
+                bbox_writer.apply_track_name_mapping(canonical_mapping)
+            if seg_writer:
+                seg_writer.apply_track_name_mapping(canonical_mapping)
 
     if bbox_writer:
         bbox_writer.save()
@@ -1168,6 +1364,21 @@ def _save_outputs(
                         f"  [yellow]Warning: {len(swaps)} identity swap(s) "
                         f"detected[/yellow]"
                     )
+
+    # Report mask reconciliation swaps
+    if mask_reconciler and not quiet:
+        swaps = mask_reconciler.detect_swaps()
+        if swaps:
+            console.print(
+                f"  [yellow]Warning: {len(swaps)} mask identity swap(s) "
+                f"detected[/yellow]"
+            )
+        stats = mask_reconciler.get_iou_stats()
+        if stats["mean"] > 0:
+            console.print(
+                f"  Mask IoU: mean={stats['mean']:.2f}, "
+                f"min={stats['min']:.2f}, max={stats['max']:.2f}"
+            )
 
     # Summary
     if not quiet:

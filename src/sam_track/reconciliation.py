@@ -1,13 +1,15 @@
-"""ID reconciliation for matching SAM3 masks to poses.
+"""ID reconciliation for matching SAM3 masks to poses or input masks.
 
 This module provides tools for:
 - Matching SAM3 segmentation masks to pose instances using Hungarian algorithm
+- Matching SAM3 segmentation masks to input masks using IoU
 - Detecting identity swaps across frames
 - Building frame-to-ID mappings for output reconciliation
 
 The key insight from experimentation is that SAM3 mid-propagation re-prompting
 works for adding NEW objects, but NOT for correcting existing tracks. Therefore,
-identity correction must be done via post-processing with mask-to-pose matching.
+identity correction must be done via post-processing with mask-to-pose matching
+or mask-to-mask matching (IoU-based).
 """
 
 from collections import defaultdict
@@ -85,6 +87,29 @@ class SwapEvent:
     track_name: str
     old_sam3_id: int
     new_sam3_id: int
+
+
+@dataclass
+class MaskAssignment:
+    """A single mask-to-mask assignment at a frame.
+
+    Used for matching input (anchor) masks to SAM3 output masks.
+
+    Attributes:
+        frame_idx: Frame index where assignment was made.
+        input_track_id: Track ID from the input/anchor mask.
+        input_track_name: Track name from the input/anchor mask.
+        sam3_obj_id: SAM3 object ID that was matched.
+        iou: Intersection over Union score for the match.
+        sam3_score: SAM3 mask detection confidence score.
+    """
+
+    frame_idx: int
+    input_track_id: int
+    input_track_name: str | None
+    sam3_obj_id: int
+    iou: float
+    sam3_score: float = 1.0
 
 
 def default_match_predicate(
@@ -341,6 +366,251 @@ class IDReconciler:
             List of all TrackAssignment objects from match_frame() calls.
         """
         return list(self._assignments)
+
+    def clear(self) -> None:
+        """Clear accumulated assignments."""
+        self._assignments.clear()
+
+
+@dataclass
+class MaskReconciler:
+    """Matches SAM3 masks to input masks using IoU and reconciles track IDs.
+
+    This class implements Hungarian algorithm matching between input/anchor masks
+    and SAM3 segmentation masks, using IoU (Intersection over Union) as the cost
+    metric. This enables post-hoc identity correction using sparse ground truth
+    mask annotations.
+
+    Unlike IDReconciler (which uses keypoints-in-mask for pose matching), this
+    reconciler works purely with mask overlap, making it suitable for workflows
+    where users have corrected masks at specific frames that should be used as
+    identity anchors.
+
+    Attributes:
+        min_iou: Minimum IoU threshold for a valid match. Matches below this
+            threshold are rejected.
+        track_names: Optional mapping of input track_id -> name for naming.
+
+    Example:
+        >>> reconciler = MaskReconciler(min_iou=0.3)
+        >>> for frame_idx in anchor_frames:
+        ...     assignments = reconciler.match_frame(
+        ...         frame_idx=frame_idx,
+        ...         input_masks=reader.get_masks(frame_idx),
+        ...         input_track_ids=reader.get_track_ids(frame_idx),
+        ...         sam3_masks=result.masks,
+        ...         sam3_obj_ids=result.object_ids,
+        ...     )
+        >>> swaps = reconciler.detect_swaps()
+        >>> id_map = reconciler.build_id_map()
+    """
+
+    min_iou: float = 0.3
+    track_names: dict[int, str] = field(default_factory=dict)
+    _assignments: list[MaskAssignment] = field(default_factory=list, repr=False)
+
+    @staticmethod
+    def compute_iou(mask1: np.ndarray, mask2: np.ndarray) -> float:
+        """Compute Intersection over Union between two binary masks.
+
+        Args:
+            mask1: First binary mask as (H, W) array.
+            mask2: Second binary mask as (H, W) array.
+
+        Returns:
+            IoU score between 0 and 1.
+        """
+        # Convert to boolean for logical operations
+        m1 = mask1.astype(bool)
+        m2 = mask2.astype(bool)
+
+        intersection = np.logical_and(m1, m2).sum()
+        union = np.logical_or(m1, m2).sum()
+
+        if union == 0:
+            return 0.0
+        return float(intersection / union)
+
+    def compute_cost_matrix(
+        self,
+        input_masks: np.ndarray,
+        sam3_masks: np.ndarray,
+    ) -> np.ndarray:
+        """Compute cost matrix for Hungarian matching.
+
+        The cost is the negative IoU (because Hungarian minimizes cost).
+        Lower cost = better match (higher IoU).
+
+        Args:
+            input_masks: Input/anchor masks with shape (N, H, W).
+            sam3_masks: SAM3 output masks with shape (M, H, W) or (M, 1, H, W).
+
+        Returns:
+            Cost matrix with shape (n_input, n_sam3).
+        """
+        # Handle (M, 1, H, W) mask format from SAM3
+        if sam3_masks.ndim == 4 and sam3_masks.shape[1] == 1:
+            sam3_masks = sam3_masks.squeeze(axis=1)
+
+        n_input = len(input_masks)
+        n_sam3 = len(sam3_masks)
+
+        if n_input == 0 or n_sam3 == 0:
+            return np.zeros((n_input, n_sam3))
+
+        cost = np.zeros((n_input, n_sam3))
+
+        for i, input_mask in enumerate(input_masks):
+            for j, sam3_mask in enumerate(sam3_masks):
+                iou = self.compute_iou(input_mask, sam3_mask)
+                # Negative because Hungarian minimizes cost
+                cost[i, j] = -iou
+
+        return cost
+
+    def match_frame(
+        self,
+        frame_idx: int,
+        input_masks: np.ndarray,
+        input_track_ids: np.ndarray,
+        sam3_masks: np.ndarray,
+        sam3_obj_ids: np.ndarray,
+        scores: np.ndarray | None = None,
+    ) -> list[MaskAssignment]:
+        """Match input masks to SAM3 masks for a single frame.
+
+        Uses Hungarian algorithm for optimal assignment, then filters
+        matches by IoU threshold.
+
+        Args:
+            frame_idx: Frame index for this match.
+            input_masks: Input/anchor masks with shape (N, H, W).
+            input_track_ids: Track IDs corresponding to input masks.
+            sam3_masks: SAM3 output masks with shape (M, H, W) or (M, 1, H, W).
+            sam3_obj_ids: SAM3 object IDs corresponding to SAM3 masks.
+            scores: Optional SAM3 mask detection confidence scores, shape (M,).
+
+        Returns:
+            List of valid MaskAssignment objects.
+        """
+        if len(input_masks) == 0 or len(sam3_masks) == 0:
+            return []
+
+        # Default scores to 1.0 if not provided
+        if scores is None:
+            scores = np.ones(len(sam3_obj_ids))
+
+        # Compute cost matrix and solve assignment
+        cost = self.compute_cost_matrix(input_masks, sam3_masks)
+        row_ind, col_ind = linear_sum_assignment(cost)
+
+        assignments = []
+        for input_idx, sam3_idx in zip(row_ind, col_ind):
+            iou = -cost[input_idx, sam3_idx]  # Convert back from negative
+
+            # Apply IoU threshold
+            if iou < self.min_iou:
+                continue
+
+            input_track_id = int(input_track_ids[input_idx])
+            track_name = self.track_names.get(input_track_id)
+
+            assignment = MaskAssignment(
+                frame_idx=frame_idx,
+                input_track_id=input_track_id,
+                input_track_name=track_name,
+                sam3_obj_id=int(sam3_obj_ids[sam3_idx]),
+                iou=iou,
+                sam3_score=float(scores[sam3_idx]),
+            )
+            assignments.append(assignment)
+
+        self._assignments.extend(assignments)
+        return assignments
+
+    def detect_swaps(self) -> list[SwapEvent]:
+        """Detect identity swaps from accumulated assignments.
+
+        A swap occurs when an input track is matched to different SAM3 object IDs
+        across frames.
+
+        Returns:
+            List of SwapEvent objects describing detected swaps.
+        """
+        swaps = []
+        by_track: dict[int, list[MaskAssignment]] = defaultdict(list)
+
+        for a in self._assignments:
+            by_track[a.input_track_id].append(a)
+
+        for input_track_id, track_assignments in by_track.items():
+            track_assignments.sort(key=lambda a: a.frame_idx)
+
+            for i in range(1, len(track_assignments)):
+                prev = track_assignments[i - 1]
+                curr = track_assignments[i]
+
+                if prev.sam3_obj_id != curr.sam3_obj_id:
+                    # Use track name if available, otherwise use "track_{id}"
+                    track_name = (
+                        curr.input_track_name
+                        or self.track_names.get(input_track_id)
+                        or f"track_{input_track_id}"
+                    )
+                    swaps.append(
+                        SwapEvent(
+                            frame_idx=curr.frame_idx,
+                            track_name=track_name,
+                            old_sam3_id=prev.sam3_obj_id,
+                            new_sam3_id=curr.sam3_obj_id,
+                        )
+                    )
+
+        return swaps
+
+    def build_id_map(self) -> dict[int, dict[int, str]]:
+        """Build frame -> {sam3_id -> track_name} mapping.
+
+        This can be used to remap SAM3 object IDs to consistent track names
+        in output files.
+
+        Returns:
+            Dictionary mapping frame_idx to {sam3_obj_id: track_name}.
+        """
+        by_frame: dict[int, dict[int, str]] = defaultdict(dict)
+        for a in self._assignments:
+            name = (
+                a.input_track_name
+                or self.track_names.get(a.input_track_id)
+                or f"track_{a.input_track_id}"
+            )
+            by_frame[a.frame_idx][a.sam3_obj_id] = name
+        return dict(by_frame)
+
+    def get_assignments(self) -> list[MaskAssignment]:
+        """Get all accumulated assignments.
+
+        Returns:
+            List of all MaskAssignment objects from match_frame() calls.
+        """
+        return list(self._assignments)
+
+    def get_iou_stats(self) -> dict[str, float]:
+        """Get IoU statistics from accumulated assignments.
+
+        Returns:
+            Dictionary with 'min', 'max', 'mean', 'median' IoU values.
+        """
+        if not self._assignments:
+            return {"min": 0.0, "max": 0.0, "mean": 0.0, "median": 0.0}
+
+        ious = [a.iou for a in self._assignments]
+        return {
+            "min": float(min(ious)),
+            "max": float(max(ious)),
+            "mean": float(np.mean(ious)),
+            "median": float(np.median(ious)),
+        }
 
     def clear(self) -> None:
         """Clear accumulated assignments."""

@@ -50,7 +50,7 @@ class TestTrackValidation:
 
         result = runner.invoke(app, ["track", str(video), "--bbox"])
         assert result.exit_code == 1
-        assert "Must specify one of --text, --roi, or --pose" in result.stdout
+        assert "--text, --roi, --pose, or --seg-input" in result.stdout
 
     def test_multiple_prompts_text_roi(self, tmp_path: Path):
         """Test error when multiple prompt types are specified."""

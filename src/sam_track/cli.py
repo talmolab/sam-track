@@ -168,6 +168,14 @@ def track(
             help="SLEAP SLP file with pose annotations for point prompts.",
         ),
     ] = None,
+    seg_input: Annotated[
+        Path | None,
+        typer.Option(
+            "--seg-input",
+            "-m",
+            help="seg.h5 file with masks to use as prompts (for iterative refinement).",
+        ),
+    ] = None,
     # Output options
     bbox: Annotated[
         bool,
@@ -328,11 +336,19 @@ def track(
         raise typer.Exit(1)
 
     # Validate mutual exclusivity of prompt options
-    prompts = [("--text", text), ("--roi", roi), ("--pose", pose)]
+    prompts = [
+        ("--text", text),
+        ("--roi", roi),
+        ("--pose", pose),
+        ("--seg-input", seg_input),
+    ]
     provided_prompts = [(name, val) for name, val in prompts if val is not None]
 
     if len(provided_prompts) == 0:
-        console.print("[red]Error: Must specify one of --text, --roi, or --pose[/red]")
+        console.print(
+            "[red]Error: Must specify one of "
+            "--text, --roi, --pose, or --seg-input[/red]"
+        )
         raise typer.Exit(1)
 
     if len(provided_prompts) > 1:
@@ -389,6 +405,13 @@ def track(
         console.print(f"[red]Error: Pose file not found: {pose}[/red]")
         raise typer.Exit(1)
 
+    # Validate seg-input file exists
+    if seg_input is not None and not seg_input.exists():
+        console.print(
+            f"[red]Error: Segmentation input file not found: {seg_input}[/red]"
+        )
+        raise typer.Exit(1)
+
     # Validate frame range options
     if stop_frame is not None and max_frames is not None:
         console.print(
@@ -424,6 +447,7 @@ def track(
             text,
             roi,
             pose,
+            seg_input,
             bbox_path,
             seg_path,
             slp_path,
@@ -443,6 +467,7 @@ def track(
             text=text,
             roi=roi,
             pose=pose,
+            seg_input=seg_input,
             bbox_path=bbox_path,
             seg_path=seg_path,
             slp_path=slp_path,
@@ -474,6 +499,7 @@ def _print_config(
     text: str | None,
     roi: Path | None,
     pose: Path | None,
+    seg_input: Path | None,
     bbox_path: Path | None,
     seg_path: Path | None,
     slp_path: Path | None,
@@ -496,6 +522,8 @@ def _print_config(
         table.add_row("Prompt:", f"roi: {roi}")
     elif pose:
         table.add_row("Prompt:", f"pose: {pose}")
+    elif seg_input:
+        table.add_row("Prompt:", f"seg-input: {seg_input}")
 
     if bbox_path:
         table.add_row("BBox output:", str(bbox_path))
@@ -527,6 +555,7 @@ def _run_tracking(
     text: str | None,
     roi: Path | None,
     pose: Path | None,
+    seg_input: Path | None,
     bbox_path: Path | None,
     seg_path: Path | None,
     slp_path: Path | None,
@@ -553,6 +582,7 @@ def _run_tracking(
 
     from .outputs import BBoxWriter, SegmentationWriter, SLPWriter
     from .prompts import (
+        MaskPromptHandler,
         PosePromptHandler,
         PromptType,
         ROIPromptHandler,
@@ -587,6 +617,15 @@ def _run_tracking(
         use_text = False
         prompt_type_str = "roi"
         prompt_value_str = str(roi)
+    elif seg_input:
+        prompt_handler = MaskPromptHandler(
+            seg_input,
+            target_resolution=(video_width, video_height),
+        )
+        prompt = prompt_handler.load()
+        use_text = False
+        prompt_type_str = "seg-input"
+        prompt_value_str = str(seg_input)
     else:  # pose
         prompt_handler = PosePromptHandler(pose, ignore_tracks=ignore_gt_tracks)
         prompt = prompt_handler.load()
